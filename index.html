@@ -35,6 +35,7 @@ body{background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:1
 .app{height:100%;display:flex;flex-direction:column;gap:10px;padding:10px 16px 14px;box-sizing:border-box;max-width:820px;margin:0 auto}
 header{display:flex;align-items:center;gap:10px}
 header h1{font-family:var(--font-dot);font-weight:400;font-size:17px;margin:0;letter-spacing:.04em;white-space:nowrap}
+.ver{font-family:var(--font-ui);font-size:10px;color:var(--mute);margin-left:6px;letter-spacing:0}
 .song{flex:1;min-width:0;color:var(--mute);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 button{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 12px;cursor:pointer;touch-action:manipulation}
 button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--now);outline-offset:2px}
@@ -99,7 +100,7 @@ textarea{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border
 
 <div class="app">
   <header>
-    <h1>音程バー練習機</h1>
+    <h1>音程バー練習機<small class="ver">v6</small></h1>
     <div class="song" id="song">見本表示中</div>
     <button id="openLoad" class="primary">曲</button>
   </header>
@@ -136,6 +137,7 @@ textarea{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border
   <div class="toggles">
     <button id="mic" class="mic">マイク OFF</button>
     <button id="fold" class="on">オクターブ違いOK</button>
+    <button id="lat">遅れ補正 0.15秒</button>
     <button id="guide" disabled>お手本の声 OFF</button>
     <button id="openLyr" disabled>歌詞</button>
     <button id="contour" class="on">細い線 ON</button>
@@ -415,7 +417,7 @@ async function openSong(rec, onProg){
   onProg(1, '仕上げ中');
   await setupPlayers(URL.createObjectURL(rec.vocal), accUrl);
   const res = rec.res;
-  S.notes = res.notes; S.contour = res.contour; S.hop = res.hop; S.c0 = res.c0; S.songMed = null; Mic.shift = null;
+  S.notes = res.notes; S.contour = res.contour; S.hop = res.hop; S.c0 = res.c0; S.songMed = null; Mic.shift = null; Mic.diffs = [];
   S.demo = false; S.key = rec.id; S.t = 0; Mic.pts = [];
   const ab = rec.ab || {};
   S.A = ab.A ?? null; S.B = ab.B ?? null; S.loop = !!(ab.loop && S.A!==null && S.B!==null);
@@ -609,7 +611,8 @@ function pause(){ each(el => el.pause()); S.playing = false; refreshUI(); }
 function applySpeed(){ const r = $('speed').value/100; each(el => { el.playbackRate = r; el.defaultPlaybackRate = r; }); $('speedv').textContent = $('speed').value + '%'; }
 
 /* ---------- microphone ---------- */
-const Mic = {on:false, ctx:null, an:null, buf:null, stream:null, pts:[], hist:[], cur:null, fold:true};
+const Mic = {on:false, ctx:null, an:null, buf:null, stream:null, pts:[], hist:[], cur:null, fold:true, diffs:[], shift:null, shiftVote:0, tol:0.6, lat:(store.get('lat') ?? 0.15)};
+const LATS = [0, 0.1, 0.15, 0.2, 0.3, 0.4];
 function micPitch(){
   const an = Mic.an; an.getFloatTimeDomainData(Mic.buf);
   const sr = Mic.ctx.sampleRate, dec = Math.max(1, Math.round(sr/16000)), fs = sr/dec;
@@ -662,40 +665,50 @@ function micTick(){
     Mic.cur = null; return;
   }
   let raw = micPitch();
+  const tNow = S.t - Mic.lat;
   if (raw === null){
-    Mic.vcount = 0; Mic.ucount = (Mic.ucount||0) + 1;
-    if (Mic.ucount > 8){ Mic.hist = []; Mic.ema = null; Mic.cur = null; }
+    Mic.ucount = (Mic.ucount||0) + 1;
+    if (Mic.ucount > 6){ Mic.hist = []; Mic.stable = null; Mic.cand = null; Mic.cur = null; }
   } else {
-    if (Mic.ema != null && Math.abs(raw - Mic.ema) > 9) raw += 12*Math.round((Mic.ema - raw)/12);
-    Mic.ucount = 0; Mic.vcount = (Mic.vcount||0) + 1;
-    Mic.hist.push(raw); if (Mic.hist.length > 9) Mic.hist.shift();
+    Mic.ucount = 0;
+    const ref = Mic.stable != null ? Mic.stable : (Mic.hist.length ? median(Mic.hist) : null);
+    if (ref != null && Math.abs(raw - ref) > 9) raw += 12*Math.round((ref - raw)/12);
+    Mic.hist.push(raw); if (Mic.hist.length > 5) Mic.hist.shift();
     const med = median(Mic.hist);
-    if (Mic.ema == null) Mic.ema = med;
-    else if (Math.abs(med - Mic.ema) > 2 && (Mic.jump = (Mic.jump||0) + 1) < 8) { }
-    else { Mic.jump = 0; Mic.ema += 0.15 * (med - Mic.ema); }
-    Mic.reg = Mic.reg || []; Mic.reg.push(Mic.ema); if (Mic.reg.length > 240) Mic.reg.shift();
-    let m = Mic.ema;
-    if (Mic.fold && S.notes.length){
-      if (S.songMed == null){ const ps = S.notes.map(n=>n.p).sort((a,b)=>a-b); S.songMed = ps[ps.length>>1]; }
-      const want = 12*Math.round((S.songMed - median(Mic.reg))/12);
-      if (Mic.shift == null) Mic.shift = want;
-      else if (want !== Mic.shift){ Mic.shiftVote = (Mic.shiftVote||0) + 1; if (Mic.shiftVote > 90){ Mic.shift = want; Mic.shiftVote = 0; } }
-      else Mic.shiftVote = 0;
-      m += Mic.shift;
+    if (Mic.stable == null){ if (Mic.hist.length >= 3) Mic.stable = med; }
+    else if (Math.abs(med - Mic.stable) <= 1){ Mic.stable += 0.4 * (med - Mic.stable); Mic.cand = null; }
+    else {
+      if (Mic.cand != null && Math.abs(med - Mic.cand) <= 1){ Mic.candN++; Mic.cand = med; }
+      else { Mic.cand = med; Mic.candN = 1; }
+      if (Mic.candN >= 3){ Mic.stable = med; Mic.cand = null; }
     }
-    Mic.cur = Mic.vcount >= 4 || Mic.cur !== null ? m : null;
-    if (Mic.cur !== null && S.playing && !S.demo){
-      const last = Mic.pts[Mic.pts.length-1];
-      if (!last || S.t - last.t > 0.012) Mic.pts.push({t:S.t, m});
+    if (Mic.stable != null){
+      let m = Mic.stable;
+      if (Mic.fold){
+        const tg = noteAt(tNow);
+        if (tg){ Mic.diffs.push(tg.p - m); if (Mic.diffs.length > 150) Mic.diffs.shift(); }
+        if (Mic.diffs.length >= 20){
+          const want = 12*Math.round(median(Mic.diffs)/12);
+          if (Mic.shift == null) Mic.shift = want;
+          else if (want !== Mic.shift){ if (++Mic.shiftVote > 120){ Mic.shift = want; Mic.shiftVote = 0; } }
+          else Mic.shiftVote = 0;
+        }
+        m += Mic.shift || 0;
+      }
+      Mic.cur = m;
+      if (S.playing && !S.demo){
+        const last = Mic.pts[Mic.pts.length-1];
+        if (!last || tNow - last.t > 0.012) Mic.pts.push({t:tNow, m});
+      }
     }
   }
   J.hidden = false;
-  const tgt = noteAt(S.t);
+  const tgt = noteAt(tNow);
   if (Mic.cur === null){ J.className='judge'; J.textContent = tgt ? '声を出してください' : '…'; return; }
   const name = NAMES[((Math.round(Mic.cur)%12)+12)%12];
   if (!tgt){ J.className='judge'; J.textContent = name; return; }
   const diff = Mic.cur - tgt.p;
-  if (Math.abs(diff) <= 0.5){ J.className='judge ok'; J.textContent = name + '　ぴったり'; }
+  if (Math.abs(diff) <= Mic.tol){ J.className='judge ok'; J.textContent = name + '　ぴったり'; }
   else { J.className='judge off'; J.textContent = name + '　' + Math.abs(diff).toFixed(1) + (diff > 0 ? ' 高い' : ' 低い'); }
 }
 
@@ -724,7 +737,8 @@ $('clearAB').onclick = () => { S.A = S.B = null; S.loop = false; saveAB(); refre
 $('guide').onclick = () => { S.guide = !S.guide; if (S.slave) S.slave.muted = !S.guide; refreshUI(); };
 $('contour').onclick = () => { S.showContour = !S.showContour; refreshUI(); };
 $('mic').onclick = micToggle;
-$('fold').onclick = () => { Mic.fold = !Mic.fold; Mic.shift = null; refreshUI(); };
+$('fold').onclick = () => { Mic.fold = !Mic.fold; Mic.shift = null; Mic.diffs = []; refreshUI(); };
+$('lat').onclick = () => { const i = LATS.indexOf(Mic.lat); Mic.lat = LATS[(i+1) % LATS.length]; store.set('lat', Mic.lat); Mic.pts = []; refreshUI(); };
 $('zin').onclick = () => { S.pps = Math.min(260, S.pps*1.25); };
 $('zout').onclick = () => { S.pps = Math.max(35, S.pps/1.25); };
 
@@ -748,6 +762,7 @@ function refreshUI(){
   $('contour').classList.toggle('on', S.showContour); $('contour').textContent = '細い線 ' + (S.showContour ? 'ON' : 'OFF');
   $('tdur').textContent = fmt(S.dur, false);
   $('mic').classList.toggle('on', Mic.on); $('mic').textContent = 'マイク ' + (Mic.on ? 'ON' : 'OFF');
+  $('lat').textContent = '遅れ補正 ' + Mic.lat.toFixed(2).replace(/0$/,'') + '秒';
   $('fold').classList.toggle('on', Mic.fold); $('fold').textContent = Mic.fold ? 'オクターブ違いOK' : 'オクターブも判定';
 }
 
@@ -808,7 +823,7 @@ function drawRoll(){
     const y = yOf(n.p) + rh*0.14, hh = rh*0.72;
     const isNow = n.s <= S.t && n.e >= S.t;
     if (isNow) current = n;
-    const hit = isNow && Mic.on && Mic.cur !== null && Math.abs(Mic.cur - n.p) <= 0.5;
+    const tl = S.t - Mic.lat; const hit = Mic.on && Mic.cur !== null && n.s <= tl && n.e >= tl && Math.abs(Mic.cur - n.p) <= Mic.tol;
     ctx.fillStyle = hit ? C['--hit'] : n.e < S.t ? C['--bar-past'] : C['--bar'];
     if (isNow){ ctx.shadowColor = hit ? C['--hit'] : C['--bar']; ctx.shadowBlur = 14*dpr; }
     rr(ctx, x, y, Math.max(2*dpr, x2-x), hh, 4*dpr); ctx.fill();
