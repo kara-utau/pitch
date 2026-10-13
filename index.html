@@ -103,7 +103,7 @@ textarea{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border
 
 <div class="app">
   <header>
-    <h1>音程バー練習機<small class="ver">v10</small></h1>
+    <h1>音程バー練習機<small class="ver">v11</small></h1>
     <div class="song" id="song">見本表示中</div>
     <button id="openLoad" class="primary">曲</button>
   </header>
@@ -749,8 +749,13 @@ function micPitch(){
   if (Math.sqrt(e/W) < 0.004) return null;
   const d = new Float32Array(tauMax+2); d[0]=1; let run=0, found=-1;
   for (let tau=1; tau<=tauMax+1; tau++){ let s=0; for (let j=0;j<W;j++){ const v=x[j]-x[j+tau]; s+=v*v; } run+=s; d[tau]= run>0 ? s*tau/run : 1; }
-  for (let tau=tauMin; tau<tauMax; tau++){ if (d[tau] < 0.12){ while (tau+1<tauMax && d[tau+1]<d[tau]) tau++; found=tau; break; } }
+  for (let tau=tauMin; tau<tauMax; tau++){ if (d[tau] < 0.15){ while (tau+1<tauMax && d[tau+1]<d[tau]) tau++; found=tau; break; } }
   if (found < 0) return null;
+  for (let guard=0; guard<2; guard++){
+    const half = Math.round(found/2); if (half - 2 < tauMin) break;
+    let hb = half; for (let t2=half-2; t2<=half+2; t2++) if (d[t2] < d[hb]) hb = t2;
+    if (d[hb] < 0.2 && d[hb] < d[hb-1] && d[hb] <= d[hb+1]) found = hb; else break;
+  }
   let t=found; const a=d[t-1], b=d[t], c=d[t+1], den=a-2*b+c; if (den!==0) t += 0.5*(a-c)/den;
   return 69 + 12*Math.log2((fs/t)/440);
 }
