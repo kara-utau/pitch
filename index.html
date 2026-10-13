@@ -415,7 +415,7 @@ async function openSong(rec, onProg){
   onProg(1, '仕上げ中');
   await setupPlayers(URL.createObjectURL(rec.vocal), accUrl);
   const res = rec.res;
-  S.notes = res.notes; S.contour = res.contour; S.hop = res.hop; S.c0 = res.c0;
+  S.notes = res.notes; S.contour = res.contour; S.hop = res.hop; S.c0 = res.c0; S.songMed = null; Mic.shift = null;
   S.demo = false; S.key = rec.id; S.t = 0; Mic.pts = [];
   const ab = rec.ab || {};
   S.A = ab.A ?? null; S.B = ab.B ?? null; S.loop = !!(ab.loop && S.A!==null && S.B!==null);
@@ -620,7 +620,7 @@ function micPitch(){
   if (Math.sqrt(e/W) < 0.004) return null;
   const d = new Float32Array(tauMax+2); d[0]=1; let run=0, found=-1;
   for (let tau=1; tau<=tauMax+1; tau++){ let s=0; for (let j=0;j<W;j++){ const v=x[j]-x[j+tau]; s+=v*v; } run+=s; d[tau]= run>0 ? s*tau/run : 1; }
-  for (let tau=tauMin; tau<tauMax; tau++){ if (d[tau] < 0.15){ while (tau+1<tauMax && d[tau+1]<d[tau]) tau++; found=tau; break; } }
+  for (let tau=tauMin; tau<tauMax; tau++){ if (d[tau] < 0.12){ while (tau+1<tauMax && d[tau+1]<d[tau]) tau++; found=tau; break; } }
   if (found < 0) return null;
   let t=found; const a=d[t-1], b=d[t], c=d[t+1], den=a-2*b+c; if (den!==0) t += 0.5*(a-c)/den;
   return 69 + 12*Math.log2((fs/t)/440);
@@ -661,24 +661,29 @@ function micTick(){
     J.hidden = false; J.className = 'judge off'; J.textContent = 'マイクが止まりました。再生ボタンかマイクを押し直してください';
     Mic.cur = null; return;
   }
-  const raw = micPitch();
+  let raw = micPitch();
   if (raw === null){
     Mic.vcount = 0; Mic.ucount = (Mic.ucount||0) + 1;
-    if (Mic.ucount > 5){ Mic.hist = []; Mic.ema = null; Mic.cur = null; }
+    if (Mic.ucount > 8){ Mic.hist = []; Mic.ema = null; Mic.cur = null; }
   } else {
+    if (Mic.ema != null && Math.abs(raw - Mic.ema) > 9) raw += 12*Math.round((Mic.ema - raw)/12);
     Mic.ucount = 0; Mic.vcount = (Mic.vcount||0) + 1;
-    Mic.hist.push(raw); if (Mic.hist.length > 7) Mic.hist.shift();
+    Mic.hist.push(raw); if (Mic.hist.length > 9) Mic.hist.shift();
     const med = median(Mic.hist);
     if (Mic.ema == null) Mic.ema = med;
-    else if (Math.abs(med - Mic.ema) > 2.5 && (Mic.jump = (Mic.jump||0) + 1) < 6) { /* ignore brief spikes */ }
-    else { Mic.jump = 0; Mic.ema += 0.2 * (med - Mic.ema); }
+    else if (Math.abs(med - Mic.ema) > 2 && (Mic.jump = (Mic.jump||0) + 1) < 8) { }
+    else { Mic.jump = 0; Mic.ema += 0.15 * (med - Mic.ema); }
+    Mic.reg = Mic.reg || []; Mic.reg.push(Mic.ema); if (Mic.reg.length > 240) Mic.reg.shift();
     let m = Mic.ema;
-    const tgt = noteAt(S.t);
-    if (Mic.fold){
-      if (tgt) Mic.shift = 12*Math.round((tgt.p - m)/12);
-      m += Mic.shift || 0;
+    if (Mic.fold && S.notes.length){
+      if (S.songMed == null){ const ps = S.notes.map(n=>n.p).sort((a,b)=>a-b); S.songMed = ps[ps.length>>1]; }
+      const want = 12*Math.round((S.songMed - median(Mic.reg))/12);
+      if (Mic.shift == null) Mic.shift = want;
+      else if (want !== Mic.shift){ Mic.shiftVote = (Mic.shiftVote||0) + 1; if (Mic.shiftVote > 90){ Mic.shift = want; Mic.shiftVote = 0; } }
+      else Mic.shiftVote = 0;
+      m += Mic.shift;
     }
-    Mic.cur = Mic.vcount >= 3 || Mic.cur !== null ? m : null;
+    Mic.cur = Mic.vcount >= 4 || Mic.cur !== null ? m : null;
     if (Mic.cur !== null && S.playing && !S.demo){
       const last = Mic.pts[Mic.pts.length-1];
       if (!last || S.t - last.t > 0.012) Mic.pts.push({t:S.t, m});
@@ -719,7 +724,7 @@ $('clearAB').onclick = () => { S.A = S.B = null; S.loop = false; saveAB(); refre
 $('guide').onclick = () => { S.guide = !S.guide; if (S.slave) S.slave.muted = !S.guide; refreshUI(); };
 $('contour').onclick = () => { S.showContour = !S.showContour; refreshUI(); };
 $('mic').onclick = micToggle;
-$('fold').onclick = () => { Mic.fold = !Mic.fold; refreshUI(); };
+$('fold').onclick = () => { Mic.fold = !Mic.fold; Mic.shift = null; refreshUI(); };
 $('zin').onclick = () => { S.pps = Math.min(260, S.pps*1.25); };
 $('zout').onclick = () => { S.pps = Math.max(35, S.pps/1.25); };
 
@@ -831,7 +836,7 @@ function drawRoll(){
       if (p.t < t0 - 0.1 || p.t > t1) { prev = null; continue; }
       const x = xOf(p.t), y = yOf(p.m) + rh/2;
       if (x < gutter){ prev = null; continue; }
-      if (prev && p.t - prev.t < 0.1) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+      if (prev && p.t - prev.t < 0.1 && Math.abs(p.m - prev.m) < 3) ctx.lineTo(x, y); else ctx.moveTo(x, y);
       prev = p;
     }
     ctx.stroke();
