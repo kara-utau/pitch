@@ -103,7 +103,7 @@ textarea{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border
 
 <div class="app">
   <header>
-    <h1>音程バー練習機<small class="ver">v9</small></h1>
+    <h1>音程バー練習機<small class="ver">v10</small></h1>
     <div class="song" id="song">見本表示中</div>
     <button id="openLoad" class="primary">曲</button>
   </header>
@@ -399,8 +399,9 @@ function wavMono(X, sr){
   for (let i=0, o=44; i<n; i++, o+=2){ const s = Math.max(-1, Math.min(1, X[i])); v.setInt16(o, s*32767, true); }
   return new Blob([buf], {type:'audio/wav'});
 }
-async function buildAudio(rec, semis, onProg){
+async function buildAudio(rec0, semis, onProg){
   let accUrl = null, vocUrl = null;
+  const rec = semis ? await freshRec(rec0) : rec0;
   if (!semis){
     if (rec.accs && rec.accs.length){
       const m = await mixStems(rec.accs, (p, t) => onProg(0.6 + p*0.4, t), 32000);
@@ -503,7 +504,23 @@ try { navigator.storage && navigator.storage.persist && navigator.storage.persis
 let CUR = null;
 const titleOf = name => name.normalize('NFC').replace(/_[^_]*_mixed\.\w+$/,'').replace(/\.\w+$/,'');
 const toBlob = async f => new Blob([await f.arrayBuffer()], {type: f.type || 'audio/mp4'});
-async function saveCur(){ if (!CUR) return; try { await DB.put(CUR); } catch(e){ console.warn(e); } }
+let saveChain = Promise.resolve();
+function saveCur(){
+  if (!CUR) return saveChain;
+  const c = CUR;
+  saveChain = saveChain.then(async () => {
+    try {
+      const f = await DB.get(c.id);
+      if (f){ f.ab = c.ab; f.lyrics = c.lyrics; f.semi = c.semi; f.lastUsed = c.lastUsed; f.res = c.res; f.title = c.title; await DB.put(f); }
+      else await DB.put(c);
+    } catch(e){ console.warn(e); }
+  });
+  return saveChain;
+}
+async function freshRec(rec){
+  try { await saveChain; const f = await DB.get(rec.id); if (f && f.vocal) return f; } catch(e){}
+  return rec;
+}
 
 async function analyzeVocal(blob, onProg){
   const ab = await decode(await blob.arrayBuffer(), 16000);
