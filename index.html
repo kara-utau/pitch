@@ -1,0 +1,680 @@
+<title>音程バー練習機</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap">
+<style>
+/* Layout: one-screen karaoke monitor — roll on top, overview strip, then thumb-sized controls */
+:root{
+  --bg:#141526;          /* deep ink violet, the monitor */
+  --panel:#1d1f36;
+  --line:#2c2f50;
+  --fg:#ecebf5;
+  --mute:#9a9ab8;
+  --bar:#f2b544;         /* amber guide bar */
+  --bar-past:#7d6233;
+  --now:#6fe0d0;         /* playhead / current */
+  --loop:rgba(111,224,208,.12);
+  --ab:#ff8a7a;
+  --me:#ff5f86;          /* your voice */
+  --hit:#7ee08a;         /* on pitch */
+  --font-ui:"Zen Kaku Gothic New","Hiragino Sans","Noto Sans JP",system-ui,sans-serif;
+  --font-dot:"DotGothic16","Zen Kaku Gothic New",monospace;
+  color-scheme:dark;
+}
+html,body{height:100%}
+body{background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:15px;-webkit-tap-highlight-color:transparent}
+.app{height:100%;display:flex;flex-direction:column;gap:10px;padding:10px 16px 14px;box-sizing:border-box;max-width:820px;margin:0 auto}
+header{display:flex;align-items:center;gap:10px}
+header h1{font-family:var(--font-dot);font-weight:400;font-size:17px;margin:0;letter-spacing:.04em;white-space:nowrap}
+.song{flex:1;min-width:0;color:var(--mute);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+button{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 12px;cursor:pointer;touch-action:manipulation}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--now);outline-offset:2px}
+button:disabled{opacity:.4;cursor:default}
+button.primary{background:var(--bar);color:#221a08;border-color:var(--bar);font-weight:700}
+button.on{background:var(--now);color:#0c2420;border-color:var(--now);font-weight:700}
+.stage{position:relative;flex:1;min-height:200px;border-radius:12px;overflow:hidden;background:#101120;border:1px solid var(--line)}
+#roll{display:block;width:100%;height:100%;touch-action:none}
+.judge{position:absolute;top:8px;left:48px;font-family:var(--font-dot);font-size:15px;padding:3px 10px;border-radius:8px;background:rgba(16,17,32,.8);color:var(--mute);font-variant-numeric:tabular-nums}
+.judge.ok{color:var(--hit)}
+.judge.off{color:var(--me)}
+button.mic.on{background:var(--me);border-color:var(--me);color:#2a0612}
+.badge{position:absolute;top:8px;right:8px;font-size:11px;padding:3px 8px;border-radius:99px;background:rgba(242,181,68,.16);color:var(--bar)}
+.zoom{position:absolute;bottom:8px;right:8px;display:flex;gap:6px}
+.zoom button{padding:4px 11px;background:rgba(29,31,54,.85)}
+#over{display:block;width:100%;height:38px;border-radius:8px;background:var(--panel);touch-action:none}
+.timebar{display:flex;justify-content:space-between;font-family:var(--font-dot);font-size:14px;color:var(--mute);font-variant-numeric:tabular-nums;margin-top:-4px}
+.timebar b{color:var(--fg);font-weight:400}
+.transport{display:flex;justify-content:center;gap:12px}
+.transport button{min-width:64px;font-size:15px}
+.transport #play{min-width:96px;font-size:17px}
+.ab{display:grid;grid-template-columns:1fr 1fr auto;gap:8px}
+.abcell{display:flex;align-items:center;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px}
+.abcell button{padding:6px 9px;border:none;background:transparent}
+.abcell .set{font-weight:700;color:var(--ab)}
+.abcell .val{flex:1;text-align:center;font-family:var(--font-dot);font-size:13px;font-variant-numeric:tabular-nums;color:var(--mute)}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.row label{font-size:13px;color:var(--mute)}
+#speed{flex:1;min-width:120px;accent-color:var(--bar)}
+#speedv{font-family:var(--font-dot);min-width:44px;text-align:right}
+.toggles{display:flex;gap:8px;flex-wrap:wrap}
+.toggles button{font-size:13px;padding:6px 10px}
+/* load sheet */
+.sheet{position:fixed;inset:0;background:rgba(8,8,18,.72);display:flex;align-items:flex-end;justify-content:center;z-index:5}
+.sheet .card{background:var(--panel);border:1px solid var(--line);border-radius:16px 16px 0 0;width:100%;max-width:820px;max-height:88%;overflow:auto;padding:18px 16px calc(18px + env(safe-area-inset-bottom,0px));box-sizing:border-box;display:flex;flex-direction:column;gap:12px}
+.card h2{margin:0;font-size:17px}
+.card p{margin:0;font-size:13px;color:var(--mute);line-height:1.6}
+.files{display:flex;flex-direction:column;gap:6px}
+.file{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;background:var(--bg);border-radius:10px;padding:8px 10px}
+.file span{font-size:12px;min-width:0;overflow-wrap:anywhere}
+select{font:inherit;font-size:13px;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:5px}
+.prog{height:6px;background:var(--bg);border-radius:9px;overflow:hidden}
+.prog i{display:block;height:100%;width:0;background:var(--bar);transition:width .15s}
+#msg{min-height:1.2em;color:var(--fg)}
+.pick{position:relative;overflow:hidden;display:inline-block}
+.pick input{position:absolute;inset:0;opacity:0;cursor:pointer}
+@media (prefers-reduced-motion:reduce){.prog i{transition:none}}
+</style>
+
+<div class="app">
+  <header>
+    <h1>音程バー練習機</h1>
+    <div class="song" id="song">見本表示中</div>
+    <button id="openLoad" class="primary">曲を読み込む</button>
+  </header>
+
+  <div class="stage">
+    <canvas id="roll" aria-label="音程バー"></canvas>
+    <div class="badge" id="badge">見本（音は出ません）</div>
+    <div class="judge" id="judge" hidden></div>
+    <div class="zoom"><button id="zout" aria-label="縮小">−</button><button id="zin" aria-label="拡大">＋</button></div>
+  </div>
+
+  <canvas id="over" aria-label="曲全体。タップで移動"></canvas>
+  <div class="timebar"><b id="tnow">0:00.0</b><span id="tdur">0:00</span></div>
+
+  <div class="transport">
+    <button id="back" disabled>−5秒</button>
+    <button id="play" disabled>▶ 再生</button>
+    <button id="fwd" disabled>＋5秒</button>
+  </div>
+
+  <div class="ab">
+    <div class="abcell"><button class="set" id="setA" disabled>A</button><button id="aMinus" aria-label="Aを早める">‹</button><span class="val" id="aval">--</span><button id="aPlus" aria-label="Aを遅らせる">›</button></div>
+    <div class="abcell"><button class="set" id="setB" disabled>B</button><button id="bMinus" aria-label="Bを早める">‹</button><span class="val" id="bval">--</span><button id="bPlus" aria-label="Bを遅らせる">›</button></div>
+    <button id="loop" disabled>リピート</button>
+  </div>
+
+  <div class="row">
+    <label for="speed">速さ</label>
+    <input type="range" id="speed" min="50" max="100" step="5" value="100" disabled>
+    <span id="speedv">100%</span>
+  </div>
+  <div class="toggles">
+    <button id="mic" class="mic">マイク OFF</button>
+    <button id="fold" class="on">オクターブ違いOK</button>
+    <button id="guide" disabled>お手本の声 OFF</button>
+    <button id="contour" class="on">細い線 ON</button>
+    <button id="clearAB" disabled>A・B解除</button>
+  </div>
+</div>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="card">
+    <h2>曲を読み込む</h2>
+    <p>Moisesで書き出したファイルを<b>まとめて全部</b>選んでください。名前に「ボーカル」が入ったものを音程バーにし、残りは伴奏として重ねて鳴らします。ファイルはこのスマホの中だけで処理されます。</p>
+    <span class="pick"><button class="primary" type="button">ファイルを選ぶ</button><input type="file" id="fileIn" multiple accept="audio/*,.m4a,.mp3,.wav,.aac"></span>
+    <div class="files" id="files"></div>
+    <div class="prog"><i id="progBar"></i></div>
+    <div id="msg"></div>
+    <div class="row">
+      <button id="go" class="primary" disabled>音程バーを作る</button>
+      <button id="closeLoad">閉じる</button>
+    </div>
+    <p>イヤホンで伴奏を聴きながら歌うのがおすすめです。初回の解析は1曲あたり数秒〜十数秒かかります。2回目以降、同じボーカルファイルなら解析結果を再利用します。</p>
+  </div>
+</div>
+
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+const store = {
+  get(k){ try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch(e){ return null; } },
+  set(k,v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
+};
+
+/* ---------- state ---------- */
+const S = {
+  notes: [], contour: null, hop: 0.02, c0: 0.015,
+  dur: 0, t: 2.0, pps: 90, playing: false,
+  A: null, B: null, loop: false, demo: true,
+  showContour: true, guide: false,
+  master: null, slave: null, key: null
+};
+
+/* demo melody (original, for preview only) */
+(function demo(){
+  const m = [[0.4,0.5,64],[0.9,0.5,67],[1.4,1.0,69],[2.6,0.5,67],[3.1,0.5,64],[3.6,1.2,62],[5.2,0.5,60],[5.7,0.5,62],[6.2,0.5,64],[6.7,1.4,67],[8.5,0.5,69],[9.0,0.5,72],[9.5,1.5,71]];
+  S.notes = m.map(([s,d,p]) => ({s, e:s+d, p}));
+  S.dur = 11.5;
+})();
+
+/* ---------- pitch worker ---------- */
+const WORKER_SRC = `
+self.onmessage = (e) => {
+  const x = e.data.x, sr = e.data.sr;
+  const hop = Math.round(sr*0.02), W = Math.round(sr*0.03);
+  const tauMin = Math.floor(sr/1000), tauMax = Math.ceil(sr/70);
+  const n = Math.max(0, Math.floor((x.length - W - tauMax - 2)/hop));
+  const rms = new Float32Array(n);
+  for (let i=0;i<n;i++){ let s=0; const o=i*hop; for(let j=0;j<W;j++){ const v=x[o+j]; s+=v*v; } rms[i]=Math.sqrt(s/W); }
+  const sorted = Float32Array.from(rms).sort();
+  const p95 = sorted[Math.floor(sorted.length*0.95)] || 0;
+  const gate = Math.max(0.002, p95*0.12);
+  const f0 = new Float32Array(n);
+  const d = new Float32Array(tauMax+2);
+  for (let i=0;i<n;i++){
+    if (i % 250 === 0) self.postMessage({progress: i/n});
+    if (rms[i] < gate){ f0[i]=NaN; continue; }
+    const o=i*hop; let run=0, found=-1;
+    d[0]=1;
+    for (let tau=1; tau<=tauMax+1; tau++){
+      let s=0; for (let j=0;j<W;j++){ const v=x[o+j]-x[o+j+tau]; s+=v*v; }
+      run+=s; d[tau] = run>0 ? s*tau/run : 1;
+    }
+    for (let tau=tauMin; tau<tauMax; tau++){
+      if (d[tau] < 0.15){ while (tau+1<tauMax && d[tau+1]<d[tau]) tau++; found=tau; break; }
+    }
+    if (found < 0){ f0[i]=NaN; continue; }
+    let t=found; const a=d[t-1], b=d[t], c=d[t+1], den=a-2*b+c;
+    if (den !== 0) t += 0.5*(a-c)/den;
+    f0[i] = 69 + 12*Math.log2((sr/t)/440);
+  }
+  self.postMessage({done:true, f0: f0, hop: hop/sr, c0: (W/2)/sr}, [f0.buffer]);
+};`;
+
+function analyze(x, sr, onProg){
+  return new Promise((res, rej) => {
+    const w = new Worker(URL.createObjectURL(new Blob([WORKER_SRC], {type:'text/javascript'})));
+    w.onmessage = e => {
+      if (e.data.progress !== undefined) onProg(e.data.progress);
+      if (e.data.done){ w.terminate(); res(e.data); }
+    };
+    w.onerror = err => { w.terminate(); rej(err); };
+    w.postMessage({x, sr}, [x.buffer]);
+  });
+}
+
+function median(a){ const b=a.slice().sort((p,q)=>p-q); return b[b.length>>1]; }
+
+function buildNotes(f0, hop, c0){
+  const n = f0.length, sm = new Float32Array(n);
+  for (let i=0;i<n;i++){
+    if (isNaN(f0[i])){ sm[i]=NaN; continue; }
+    const w=[]; for (let k=-2;k<=2;k++){ const v=f0[i+k]; if (v!==undefined && !isNaN(v)) w.push(v); }
+    sm[i] = median(w);
+  }
+  const notes=[]; let cur=null;
+  const close = () => {
+    if (cur && cur.vals.length >= 5){
+      notes.push({s: c0+cur.i0*hop - hop/2, e: c0+cur.i1*hop + hop/2, p: Math.round(median(cur.vals))});
+    }
+    cur=null;
+  };
+  for (let i=0;i<n;i++){
+    const v = sm[i];
+    if (isNaN(v)){ if (cur && i-cur.i1 > 2) close(); continue; }
+    if (cur){
+      const m = median(cur.vals.slice(-15));
+      if (Math.abs(v-m) < 0.75 && i-cur.i1 <= 3){ cur.vals.push(v); cur.i1=i; continue; }
+      close();
+    }
+    cur = {i0:i, i1:i, vals:[v]};
+  }
+  close();
+  const merged=[];
+  for (const nt of notes){
+    const last = merged[merged.length-1];
+    if (last && last.p===nt.p && nt.s-last.e < 0.07) last.e = nt.e; else merged.push(nt);
+  }
+  const contour = Array.from(sm, v => isNaN(v) ? null : Math.round(v*10)/10);
+  return {notes: merged, contour};
+}
+
+/* ---------- audio decode / mix ---------- */
+function decode(buf, sr){
+  const Ctx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const ctx = new Ctx(2, sr, sr);
+  return new Promise((res, rej) => {
+    const p = ctx.decodeAudioData(buf, res, rej);
+    if (p && p.then) p.then(res, rej);
+  });
+}
+
+function wavBlob(L, R, sr){
+  const n=L.length, buf=new ArrayBuffer(44+n*4), v=new DataView(buf);
+  const w=(o,s)=>{ for(let i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); };
+  w(0,'RIFF'); v.setUint32(4,36+n*4,true); w(8,'WAVE'); w(12,'fmt ');
+  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,2,true);
+  v.setUint32(24,sr,true); v.setUint32(28,sr*4,true); v.setUint16(32,4,true); v.setUint16(34,16,true);
+  w(36,'data'); v.setUint32(40,n*4,true);
+  let o=44;
+  for (let i=0;i<n;i++){
+    const l=Math.max(-1,Math.min(1,L[i])), r=Math.max(-1,Math.min(1,R[i]));
+    v.setInt16(o, l*32767, true); v.setInt16(o+2, r*32767, true); o+=4;
+  }
+  return new Blob([buf], {type:'audio/wav'});
+}
+
+async function mixStems(files, onProg){
+  const sr = 32000; let L=null, R=null;
+  for (let k=0;k<files.length;k++){
+    onProg(k/files.length, `伴奏を重ねています（${k+1}/${files.length}）`);
+    const ab = await decode(await files[k].arrayBuffer(), sr);
+    const l = ab.getChannelData(0), r = ab.numberOfChannels>1 ? ab.getChannelData(1) : l;
+    if (!L || l.length > L.length){
+      const nL=new Float32Array(l.length), nR=new Float32Array(l.length);
+      if (L){ nL.set(L); nR.set(R); }
+      L=nL; R=nR;
+    }
+    for (let i=0;i<l.length;i++){ L[i]+=l[i]; R[i]+=r[i]; }
+  }
+  let peak=0; for (let i=0;i<L.length;i++){ const a=Math.abs(L[i]), b=Math.abs(R[i]); if(a>peak)peak=a; if(b>peak)peak=b; }
+  if (peak > 0.98){ const g=0.98/peak; for (let i=0;i<L.length;i++){ L[i]*=g; R[i]*=g; } }
+  return wavBlob(L, R, sr);
+}
+
+/* ---------- load sheet ---------- */
+let picked = [];
+const roleOf = name => /ボーカル|ヴォーカル|vocal|voice|歌/i.test(name) ? 'vocal'
+  : /メトロノーム|metronome|click/i.test(name) ? 'skip' : 'acc';
+const partName = name => {
+  const m = name.match(/_([^_]+?)\d*_mixed/i);
+  return m ? m[1] : name;
+};
+
+$('openLoad').onclick = () => { $('sheet').hidden = false; };
+$('closeLoad').onclick = () => { $('sheet').hidden = true; };
+$('fileIn').onchange = e => {
+  picked = Array.from(e.target.files).map(f => ({f, role: roleOf(f.name)}));
+  const box = $('files'); box.textContent = '';
+  picked.forEach((it, i) => {
+    const row = document.createElement('div'); row.className='file';
+    const sp = document.createElement('span'); sp.textContent = `${partName(it.f.name)}　(${(it.f.size/1048576).toFixed(1)}MB)`;
+    sp.title = it.f.name;
+    const sel = document.createElement('select'); sel.id = 'role'+i;
+    [['vocal','音程バー（ボーカル）'],['acc','伴奏に使う'],['skip','使わない']].forEach(([v,t]) => {
+      const o=document.createElement('option'); o.value=v; o.textContent=t; if (v===it.role) o.selected=true; sel.appendChild(o);
+    });
+    sel.onchange = () => { it.role = sel.value; checkGo(); };
+    row.append(sp, sel); box.appendChild(row);
+  });
+  checkGo();
+};
+function checkGo(){
+  const v = picked.filter(p=>p.role==='vocal').length;
+  $('go').disabled = v !== 1;
+  $('msg').textContent = picked.length === 0 ? '' : v === 1 ? '準備OK。「音程バーを作る」を押してください。' : v === 0 ? 'ボーカルのファイルを1つ「音程バー」に指定してください。' : '「音程バー」は1つだけにしてください。';
+}
+const setProg = (p, text) => { $('progBar').style.width = Math.round(p*100)+'%'; if (text) $('msg').textContent = text; };
+
+$('go').onclick = async () => {
+  $('go').disabled = true;
+  try {
+    const vocal = picked.find(p=>p.role==='vocal').f;
+    const accs = picked.filter(p=>p.role==='acc').map(p=>p.f);
+    const key = 'pitch:' + vocal.name + ':' + vocal.size;
+    let res = store.get(key);
+    if (!res){
+      setProg(0, 'ボーカルを読み込んでいます');
+      const ab = await decode(await vocal.arrayBuffer(), 16000);
+      const a = ab.getChannelData(0), b = ab.numberOfChannels>1 ? ab.getChannelData(1) : a;
+      const x = new Float32Array(a.length); for (let i=0;i<a.length;i++) x[i]=(a[i]+b[i])*0.5;
+      const r = await analyze(x, 16000, p => setProg(p*0.6, `音程を解析しています ${Math.round(p*100)}%`));
+      const built = buildNotes(r.f0, r.hop, r.c0);
+      res = {notes: built.notes, contour: built.contour, hop: r.hop, c0: r.c0};
+      store.set(key, res);
+    }
+    let accUrl = null;
+    if (accs.length){
+      const blob = await mixStems(accs, (p, t) => setProg(0.6 + p*0.4, t));
+      accUrl = URL.createObjectURL(blob);
+    }
+    setProg(1, '仕上げ中');
+    await setupPlayers(URL.createObjectURL(vocal), accUrl);
+    S.notes = res.notes; S.contour = res.contour; S.hop = res.hop; S.c0 = res.c0;
+    S.demo = false; S.key = key; S.t = 0;
+    const ab = store.get('ab:'+key) || {};
+    S.A = ab.A ?? null; S.B = ab.B ?? null; S.loop = !!(ab.loop && S.A!==null && S.B!==null);
+    $('song').textContent = vocal.name.replace(/_[^_]*_mixed\.\w+$/,'').replace(/\.\w+$/,'');
+    $('badge').hidden = true;
+    enable(true); fitRange(); refreshUI();
+    $('msg').textContent = `完了：音のかたまり ${S.notes.length} 個を見つけました。`;
+    setTimeout(()=>{ $('sheet').hidden = true; }, 600);
+  } catch(err){
+    console.error(err);
+    $('msg').textContent = 'ファイルを読み込めませんでした。m4a・mp3・wavのいずれかか確認して、もう一度選び直してください。';
+    $('go').disabled = false;
+  }
+};
+
+/* ---------- players ---------- */
+function mkAudio(url){
+  return new Promise((res, rej) => {
+    const a = new Audio(); a.preload='auto'; a.playsInline=true; a.setAttribute('playsinline','');
+    a.preservesPitch = true; a.webkitPreservesPitch = true; a.mozPreservesPitch = true;
+    a.onloadedmetadata = () => res(a); a.onerror = rej; a.src = url; a.load();
+  });
+}
+async function setupPlayers(vUrl, aUrl){
+  pause();
+  [S.master, S.slave].forEach(el => { if (el){ el.pause(); el.removeAttribute('src'); } });
+  const v = await mkAudio(vUrl);
+  if (aUrl){
+    const a = await mkAudio(aUrl);
+    S.master = a; S.slave = v; S.guide = false;
+  } else {
+    S.master = v; S.slave = null; S.guide = true;
+  }
+  v.muted = !S.guide;
+  S.master.onended = () => { pause(); };
+  S.dur = S.master.duration || S.dur;
+  applySpeed();
+}
+function each(fn){ [S.master, S.slave].forEach(el => el && fn(el)); }
+function seek(t){
+  t = Math.max(0, Math.min(S.dur || 0, t));
+  if (S.loop && S.A!==null && S.B!==null && Math.abs(t - S.A) < 0.05) Mic.pts = Mic.pts.filter(p => p.t < S.A || p.t > S.B);
+  else Mic.pts = Mic.pts.filter(p => p.t < t);
+  S.t = t; each(el => { try { el.currentTime = t; } catch(e){} });
+}
+async function play(){
+  if (!S.master) return;
+  if (S.loop && S.A!==null && S.B!==null && (S.t < S.A || S.t >= S.B)) seek(S.A);
+  each(el => { el.currentTime = S.t; });
+  try {
+    await S.master.play();
+    if (S.slave){ S.slave.currentTime = S.master.currentTime; await S.slave.play(); }
+    S.playing = true;
+  } catch(e){ S.playing = false; }
+  refreshUI();
+}
+function pause(){ each(el => el.pause()); S.playing = false; refreshUI(); }
+function applySpeed(){ const r = $('speed').value/100; each(el => { el.playbackRate = r; el.defaultPlaybackRate = r; }); $('speedv').textContent = $('speed').value + '%'; }
+
+/* ---------- microphone ---------- */
+const Mic = {on:false, ctx:null, an:null, buf:null, stream:null, pts:[], hist:[], cur:null, fold:true};
+function micPitch(){
+  const an = Mic.an; an.getFloatTimeDomainData(Mic.buf);
+  const sr = Mic.ctx.sampleRate, dec = Math.max(1, Math.round(sr/16000)), fs = sr/dec;
+  const n = Math.floor(Mic.buf.length/dec), x = new Float32Array(n);
+  for (let i=0;i<n;i++){ let s=0; for (let k=0;k<dec;k++) s+=Mic.buf[i*dec+k]; x[i]=s/dec; }
+  const tauMin = Math.floor(fs/1000), tauMax = Math.ceil(fs/70), W = Math.min(400, n - tauMax - 2);
+  let e=0; for (let j=0;j<W;j++) e+=x[j]*x[j];
+  if (Math.sqrt(e/W) < 0.008) return null;
+  const d = new Float32Array(tauMax+2); d[0]=1; let run=0, found=-1;
+  for (let tau=1; tau<=tauMax+1; tau++){ let s=0; for (let j=0;j<W;j++){ const v=x[j]-x[j+tau]; s+=v*v; } run+=s; d[tau]= run>0 ? s*tau/run : 1; }
+  for (let tau=tauMin; tau<tauMax; tau++){ if (d[tau] < 0.2){ while (tau+1<tauMax && d[tau+1]<d[tau]) tau++; found=tau; break; } }
+  if (found < 0) return null;
+  let t=found; const a=d[t-1], b=d[t], c=d[t+1], den=a-2*b+c; if (den!==0) t += 0.5*(a-c)/den;
+  return 69 + 12*Math.log2((fs/t)/440);
+}
+function noteAt(t){
+  let best=null, bd=0.15;
+  for (const n of S.notes){ if (n.s - 0.15 > t) break; const dd = t < n.s ? n.s - t : t > n.e ? t - n.e : 0; if (dd <= bd){ bd = dd; best = n; } }
+  return best;
+}
+async function micToggle(){
+  if (Mic.on){
+    Mic.on = false; Mic.cur = null;
+    try { Mic.stream.getTracks().forEach(t => t.stop()); Mic.ctx.close(); } catch(e){}
+    refreshUI(); return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ flash('ここではマイクが使えません。マイク用のページで開いてください'); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false, noiseSuppression:false, autoGainControl:false}});
+    const AC = window.AudioContext || window.webkitAudioContext; const ctx = new AC(); await ctx.resume();
+    const an = ctx.createAnalyser(); an.fftSize = 2048; ctx.createMediaStreamSource(stream).connect(an);
+    Object.assign(Mic, {on:true, ctx, an, stream, buf:new Float32Array(2048), hist:[]});
+  } catch(e){ flash('マイクを使えませんでした。設定でマイクを許可してください'); }
+  refreshUI();
+}
+function micTick(){
+  const J = $('judge');
+  if (!Mic.on){ J.hidden = true; return; }
+  let m = micPitch();
+  if (m === null){ Mic.hist = []; Mic.cur = null; }
+  else {
+    Mic.hist.push(m); if (Mic.hist.length > 3) Mic.hist.shift();
+    m = median(Mic.hist);
+    const tgt = noteAt(S.t);
+    if (Mic.fold && tgt) m += 12*Math.round((tgt.p - m)/12);
+    Mic.cur = m;
+    if (S.playing && !S.demo){
+      const last = Mic.pts[Mic.pts.length-1];
+      if (!last || S.t - last.t > 0.012) Mic.pts.push({t:S.t, m});
+    }
+  }
+  J.hidden = false;
+  const tgt = noteAt(S.t);
+  if (Mic.cur === null){ J.className='judge'; J.textContent = tgt ? '声を出してください' : '…'; return; }
+  const name = NAMES[((Math.round(Mic.cur)%12)+12)%12];
+  if (!tgt){ J.className='judge'; J.textContent = name; return; }
+  const diff = Mic.cur - tgt.p;
+  if (Math.abs(diff) <= 0.5){ J.className='judge ok'; J.textContent = name + '　ぴったり'; }
+  else { J.className='judge off'; J.textContent = name + '　' + Math.abs(diff).toFixed(1) + (diff > 0 ? ' 高い' : ' 低い'); }
+}
+
+/* ---------- controls ---------- */
+function enable(on){
+  ['back','play','fwd','setA','setB','loop','speed','guide','clearAB'].forEach(id => $(id).disabled = !on);
+  $('guide').disabled = !on || !S.slave;
+}
+$('play').onclick = () => S.playing ? pause() : play();
+$('back').onclick = () => seek(S.t - 5);
+$('fwd').onclick = () => seek(S.t + 5);
+$('speed').oninput = applySpeed;
+$('setA').onclick = () => { S.A = round1(S.t); if (S.B!==null && S.B <= S.A) S.B = null; saveAB(); refreshUI(); };
+$('setB').onclick = () => {
+  const t = round1(S.t);
+  if (S.A === null || t <= S.A + 0.3){ flash('Bは A より後ろで押してください'); return; }
+  S.B = t; S.loop = true; saveAB(); refreshUI();
+};
+$('aMinus').onclick = () => nudge('A', -0.2); $('aPlus').onclick = () => nudge('A', 0.2);
+$('bMinus').onclick = () => nudge('B', -0.2); $('bPlus').onclick = () => nudge('B', 0.2);
+$('loop').onclick = () => {
+  if (S.A===null || S.B===null){ flash('先にAとBを決めてください'); return; }
+  S.loop = !S.loop; saveAB(); refreshUI();
+};
+$('clearAB').onclick = () => { S.A = S.B = null; S.loop = false; saveAB(); refreshUI(); };
+$('guide').onclick = () => { S.guide = !S.guide; if (S.slave) S.slave.muted = !S.guide; refreshUI(); };
+$('contour').onclick = () => { S.showContour = !S.showContour; refreshUI(); };
+$('mic').onclick = micToggle;
+$('fold').onclick = () => { Mic.fold = !Mic.fold; refreshUI(); };
+$('zin').onclick = () => { S.pps = Math.min(260, S.pps*1.25); };
+$('zout').onclick = () => { S.pps = Math.max(35, S.pps/1.25); };
+
+function nudge(which, d){
+  if (S[which] === null) return;
+  S[which] = round1(Math.max(0, S[which] + d));
+  if (S.A!==null && S.B!==null && S.B <= S.A + 0.3){ S[which] = round1(S[which] - d); }
+  saveAB(); refreshUI();
+}
+const round1 = t => Math.round(t*10)/10;
+function saveAB(){ if (S.key) store.set('ab:'+S.key, {A:S.A, B:S.B, loop:S.loop}); }
+let flashT=0;
+function flash(t){ const el=$('song'); const old=el.dataset.old ?? el.textContent; el.dataset.old=old; el.textContent=t; el.style.color='var(--ab)'; clearTimeout(flashT); flashT=setTimeout(()=>{ el.textContent=old; el.style.color=''; delete el.dataset.old; },1600); }
+
+const fmt = (t, dec) => { if (t===null || isNaN(t)) return '--'; const m=Math.floor(t/60), s=t-m*60; return m+':'+(dec ? s.toFixed(1).padStart(4,'0') : String(Math.floor(s)).padStart(2,'0')); };
+function refreshUI(){
+  $('play').textContent = S.playing ? '❚❚ 停止' : '▶ 再生';
+  $('aval').textContent = fmt(S.A, true); $('bval').textContent = fmt(S.B, true);
+  $('loop').classList.toggle('on', S.loop); $('loop').textContent = S.loop ? 'リピート中' : 'リピート';
+  $('guide').classList.toggle('on', S.guide); $('guide').textContent = 'お手本の声 ' + (S.guide ? 'ON' : 'OFF');
+  $('contour').classList.toggle('on', S.showContour); $('contour').textContent = '細い線 ' + (S.showContour ? 'ON' : 'OFF');
+  $('tdur').textContent = fmt(S.dur, false);
+  $('mic').classList.toggle('on', Mic.on); $('mic').textContent = 'マイク ' + (Mic.on ? 'ON' : 'OFF');
+  $('fold').classList.toggle('on', Mic.fold); $('fold').textContent = Mic.fold ? 'オクターブ違いOK' : 'オクターブも判定';
+}
+
+/* ---------- drawing ---------- */
+const roll = $('roll'), over = $('over');
+const rc = roll.getContext('2d'), oc = over.getContext('2d');
+let range = {lo: 55, hi: 76};
+function fitRange(){
+  if (!S.notes.length) return;
+  const ps = S.notes.map(n=>n.p).sort((a,b)=>a-b);
+  const lo = ps[Math.floor(ps.length*0.01)], hi = ps[Math.ceil(ps.length*0.99)-1] ?? ps[ps.length-1];
+  range = {lo: lo-2, hi: hi+2};
+  if (range.hi - range.lo < 12){ const mid=(range.hi+range.lo)/2; range={lo:Math.floor(mid-6), hi:Math.ceil(mid+6)}; }
+}
+fitRange();
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const C = {};
+function readColors(){ ['--bar','--bar-past','--now','--loop','--ab','--fg','--mute','--line','--panel'].forEach(k => C[k]=css(k)); C['--me']=css('--me'); C['--hit']=css('--hit'); }
+readColors();
+
+function size(cv){
+  const dpr = Math.min(2.5, window.devicePixelRatio || 1), r = cv.getBoundingClientRect();
+  const w = Math.max(1, Math.round(r.width*dpr)), h = Math.max(1, Math.round(r.height*dpr));
+  if (cv.width !== w || cv.height !== h){ cv.width = w; cv.height = h; }
+  return {w, h, dpr};
+}
+const NAMES = ['ド','ド#','レ','レ#','ミ','ファ','ファ#','ソ','ソ#','ラ','ラ#','シ'];
+const isBlack = p => [1,3,6,8,10].includes(((p%12)+12)%12);
+
+function rr(ctx, x, y, w, h, r){ r=Math.min(r, h/2, w/2); ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+function drawRoll(){
+  const {w, h, dpr} = size(roll);
+  const ctx = rc; ctx.clearRect(0,0,w,h);
+  const gutter = 40*dpr, px = 0.3*(w-gutter)+gutter, pps = S.pps*dpr;
+  const rows = range.hi - range.lo + 1, rh = h/rows;
+  const yOf = p => h - (p - range.lo + 1)*rh;
+  const xOf = t => px + (t - S.t)*pps;
+  const t0 = S.t - (px-gutter)/pps, t1 = S.t + (w-px)/pps;
+  // key rows
+  for (let p=range.lo; p<=range.hi; p++){
+    if (isBlack(p)){ ctx.fillStyle='rgba(255,255,255,0.025)'; ctx.fillRect(gutter, yOf(p), w-gutter, rh); }
+    if (((p%12)+12)%12===0){ ctx.fillStyle='rgba(255,255,255,0.08)'; ctx.fillRect(gutter, yOf(p)+rh-1, w-gutter, Math.max(1,dpr*0.6)); }
+  }
+  // loop region
+  if (S.A!==null && S.B!==null){
+    const xa = Math.max(gutter, xOf(S.A)), xb = Math.min(w, xOf(S.B));
+    if (xb > xa){ ctx.fillStyle = S.loop ? C['--loop'] : 'rgba(255,255,255,0.04)'; ctx.fillRect(xa, 0, xb-xa, h); }
+  }
+  // seconds grid
+  ctx.fillStyle='rgba(255,255,255,0.05)';
+  for (let s=Math.ceil(Math.max(0,t0)); s<=t1; s++){ const x=xOf(s); if (x>gutter) ctx.fillRect(x, 0, Math.max(1,dpr*0.5), h); }
+  // notes
+  let current = null;
+  for (const n of S.notes){
+    if (n.e < t0 || n.s > t1) continue;
+    const x = Math.max(gutter, xOf(n.s)), x2 = xOf(n.e); if (x2 <= gutter) continue;
+    const y = yOf(n.p) + rh*0.14, hh = rh*0.72;
+    const isNow = n.s <= S.t && n.e >= S.t;
+    if (isNow) current = n;
+    const hit = isNow && Mic.on && Mic.cur !== null && Math.abs(Mic.cur - n.p) <= 0.5;
+    ctx.fillStyle = hit ? C['--hit'] : n.e < S.t ? C['--bar-past'] : C['--bar'];
+    if (isNow){ ctx.shadowColor = hit ? C['--hit'] : C['--bar']; ctx.shadowBlur = 14*dpr; }
+    rr(ctx, x, y, Math.max(2*dpr, x2-x), hh, 4*dpr); ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+  // contour
+  if (S.showContour && S.contour){
+    ctx.strokeStyle = 'rgba(236,235,245,0.55)'; ctx.lineWidth = 1.4*dpr; ctx.beginPath();
+    const i0 = Math.max(0, Math.floor((t0 - S.c0)/S.hop)), i1 = Math.min(S.contour.length-1, Math.ceil((t1 - S.c0)/S.hop));
+    let pen = false;
+    for (let i=i0;i<=i1;i++){
+      const v = S.contour[i];
+      if (v===null){ pen=false; continue; }
+      const x = xOf(S.c0 + i*S.hop), y = yOf(v) + rh/2;
+      if (x < gutter){ pen=false; continue; }
+      if (pen) ctx.lineTo(x,y); else { ctx.moveTo(x,y); pen=true; }
+    }
+    ctx.stroke();
+  }
+  // your voice
+  if (Mic.pts.length){
+    ctx.strokeStyle = C['--me']; ctx.lineWidth = 3*dpr; ctx.lineJoin = 'round'; ctx.beginPath();
+    let prev = null;
+    for (const p of Mic.pts){
+      if (p.t < t0 - 0.1 || p.t > t1) { prev = null; continue; }
+      const x = xOf(p.t), y = yOf(p.m) + rh/2;
+      if (x < gutter){ prev = null; continue; }
+      if (prev && p.t - prev.t < 0.1) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+      prev = p;
+    }
+    ctx.stroke();
+  }
+  if (Mic.on && Mic.cur !== null){
+    ctx.fillStyle = C['--me']; ctx.beginPath(); ctx.arc(px, yOf(Mic.cur) + rh/2, 6*dpr, 0, Math.PI*2); ctx.fill();
+  }
+  // A/B markers
+  [['A',S.A],['B',S.B]].forEach(([lab,t]) => {
+    if (t===null) return; const x = xOf(t); if (x < gutter || x > w) return;
+    ctx.fillStyle = C['--ab']; ctx.fillRect(x-dpr, 0, 2*dpr, h);
+    ctx.font = `${12*dpr}px DotGothic16, monospace`; ctx.fillText(lab, x+4*dpr, 14*dpr);
+  });
+  // playhead
+  ctx.fillStyle = C['--now']; ctx.fillRect(px - dpr, 0, 2*dpr, h);
+  // gutter labels
+  ctx.fillStyle = '#101120'; ctx.fillRect(0,0,gutter,h);
+  ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(gutter-dpr, 0, dpr, h);
+  ctx.textBaseline = 'middle';
+  const fs = Math.min(12, rh/dpr*0.8);
+  for (let p=range.lo; p<=range.hi; p++){
+    const pc = ((p%12)+12)%12;
+    const cur = current && current.p === p;
+    if (pc===0 || cur || rh/dpr >= 14 && !isBlack(p)){
+      ctx.font = `${(cur?700:400)} ${fs*dpr}px "Zen Kaku Gothic New", sans-serif`;
+      ctx.fillStyle = cur ? C['--bar'] : (pc===0 ? C['--fg'] : C['--mute']);
+      const lab = NAMES[pc] + (pc===0 ? Math.floor(p/12)-1 : '');
+      ctx.fillText(lab, 5*dpr, yOf(p)+rh/2);
+    }
+  }
+  ctx.textBaseline = 'alphabetic';
+}
+
+function drawOver(){
+  const {w, h, dpr} = size(over); const ctx = oc; ctx.clearRect(0,0,w,h);
+  const D = S.dur || 1, xOf = t => t/D*w;
+  if (S.A!==null && S.B!==null){ ctx.fillStyle = S.loop ? 'rgba(111,224,208,0.22)' : 'rgba(255,255,255,0.08)'; ctx.fillRect(xOf(S.A), 0, xOf(S.B)-xOf(S.A), h); }
+  const rows = range.hi-range.lo+1;
+  for (const n of S.notes){
+    const y = h - ((n.p - range.lo + 0.5)/rows)*h;
+    ctx.fillStyle = n.e < S.t ? C['--bar-past'] : C['--bar'];
+    ctx.fillRect(xOf(n.s), y-dpr, Math.max(dpr, xOf(n.e)-xOf(n.s)), 2*dpr);
+  }
+  [S.A, S.B].forEach(t => { if (t!==null){ ctx.fillStyle=C['--ab']; ctx.fillRect(xOf(t)-dpr*0.5, 0, dpr*1.5, h); } });
+  ctx.fillStyle = C['--now']; ctx.fillRect(xOf(S.t)-dpr, 0, 2*dpr, h);
+}
+
+/* overview seek */
+function overSeek(e){ if (S.demo) return; const r = over.getBoundingClientRect(); seek((e.clientX - r.left)/r.width * S.dur); }
+over.addEventListener('pointerdown', e => { over.setPointerCapture(e.pointerId); overSeek(e); });
+over.addEventListener('pointermove', e => { if (e.buttons) overSeek(e); });
+
+/* roll drag to scrub */
+let drag = null;
+roll.addEventListener('pointerdown', e => { roll.setPointerCapture(e.pointerId); drag = {x: e.clientX, t: S.t, was: S.playing}; if (S.playing) pause(); });
+roll.addEventListener('pointermove', e => { if (!drag) return; const t = drag.t - (e.clientX - drag.x)/S.pps; if (S.demo) S.t = Math.max(0, Math.min(S.dur, t)); else seek(t); });
+roll.addEventListener('pointerup', () => { if (drag && drag.was) play(); drag = null; });
+roll.addEventListener('pointercancel', () => { drag = null; });
+
+/* main loop */
+function tick(){
+  if (S.playing && S.master){
+    S.t = S.master.currentTime;
+    if (S.loop && S.A!==null && S.B!==null && S.t >= S.B){ seek(S.A); }
+    else if (S.slave && Math.abs(S.slave.currentTime - S.t) > 0.1){ try { S.slave.currentTime = S.t; } catch(e){} }
+  }
+  $('tnow').textContent = fmt(S.t, true);
+  micTick();
+  drawRoll(); drawOver();
+  requestAnimationFrame(tick);
+}
+refreshUI();
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(()=>{});
+requestAnimationFrame(tick);
+})();
+</script>
