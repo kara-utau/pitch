@@ -103,7 +103,7 @@ textarea{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border
 
 <div class="app">
   <header>
-    <h1>音程バー練習機<small class="ver">v11</small></h1>
+    <h1>音程バー練習機<small class="ver">v12</small></h1>
     <div class="song" id="song">見本表示中</div>
     <button id="openLoad" class="primary">曲</button>
   </header>
@@ -401,12 +401,14 @@ function wavMono(X, sr){
 }
 async function buildAudio(rec0, semis, onProg){
   let accUrl = null, vocUrl = null;
-  const rec = semis ? await freshRec(rec0) : rec0;
+  const rec = await freshRec(rec0);
   if (!semis){
-    if (rec.accs && rec.accs.length){
-      const m = await mixStems(rec.accs, (p, t) => onProg(0.6 + p*0.4, t), 32000);
-      accUrl = URL.createObjectURL(wavBlob(m.L, m.R, m.sr));
-    }
+    try {
+      if (rec.accs && rec.accs.length){
+        const m = await mixStems(rec.accs, (p, t) => onProg(0.6 + p*0.4, t), 32000);
+        accUrl = URL.createObjectURL(wavBlob(m.L, m.R, m.sr));
+      }
+    } catch(e){ throw new Error('原曲キーの伴奏を読み込み中で失敗：' + (e && (e.message || e.name) || e)); }
     return {accUrl, vocUrl: URL.createObjectURL(rec.vocal)};
   }
   const sr = 22050, tag = 'キー ' + (semis > 0 ? '+' : '') + semis + ' に変えています';
