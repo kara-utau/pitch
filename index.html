@@ -103,7 +103,7 @@ textarea{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border
 
 <div class="app">
   <header>
-    <h1>音程バー練習機<small class="ver">v8</small></h1>
+    <h1>音程バー練習機<small class="ver">v9</small></h1>
     <div class="song" id="song">見本表示中</div>
     <button id="openLoad" class="primary">曲</button>
   </header>
@@ -342,64 +342,92 @@ async function mixStems(files, onProg, sr){
 /* ---------- key change: WSOLA time-stretch + resample, in a worker ---------- */
 const SHIFT_SRC = `
 self.onmessage = (e) => {
-  const {L, R, ratio} = e.data, len = L.length;
-  const N = 1024, Hs = 512, tol = 160, Lc = 384;
-  const win = new Float32Array(N); for (let j=0;j<N;j++) win[j] = 0.5 - 0.5*Math.cos(2*Math.PI*j/N);
-  const mono = new Float32Array(len); for (let i=0;i<len;i++) mono[i] = L[i] + R[i];
-  const sLen = Math.ceil(len * ratio) + N;
-  const sL = new Float32Array(sLen), sR = new Float32Array(sLen);
-  const frames = Math.floor((sLen - N) / Hs);
-  let prev = 0;
-  const corr = (a, b) => { let s = 0; for (let j=0;j<Lc;j+=2) s += mono[a+j]*mono[b+j]; return s; };
-  for (let k=0;k<frames;k++){
-    const nominal = Math.round(k*Hs/ratio);
-    if (nominal + N >= len) break;
-    let best = nominal;
-    if (k > 0){
-      const nat = prev + Hs;
-      if (nat + Lc < len){
-        let bs = -Infinity;
-        const lo = Math.max(0, nominal - tol), hi = Math.min(len - N - 1, nominal + tol);
-        for (let c=lo; c<=hi; c+=4){ const v = corr(nat, c); if (v > bs){ bs = v; best = c; } }
-        const c0 = best;
-        for (let c=Math.max(lo,c0-3); c<=Math.min(hi,c0+3); c++){ const v = corr(nat, c); if (v > bs){ bs = v; best = c; } }
+  try {
+    const X = e.data.X, ratio = e.data.ratio, len = X.length;
+    const N = 1024, Hs = 512, tol = 160, Lc = 384;
+    const win = new Float32Array(N); for (let j=0;j<N;j++) win[j] = 0.5 - 0.5*Math.cos(2*Math.PI*j/N);
+    const sLen = Math.ceil(len * ratio) + N;
+    const S = new Float32Array(sLen);
+    const frames = Math.floor((sLen - N) / Hs);
+    let prev = 0;
+    const corr = (a, b) => { let s = 0; for (let j=0;j<Lc;j+=2) s += X[a+j]*X[b+j]; return s; };
+    for (let k=0;k<frames;k++){
+      const nominal = Math.round(k*Hs/ratio);
+      if (nominal + N >= len) break;
+      let best = nominal;
+      if (k > 0){
+        const nat = prev + Hs;
+        if (nat + Lc < len){
+          let bs = -Infinity;
+          const lo = Math.max(0, nominal - tol), hi = Math.min(len - N - 1, nominal + tol);
+          for (let c=lo; c<=hi; c+=4){ const v = corr(nat, c); if (v > bs){ bs = v; best = c; } }
+          const c0 = best;
+          for (let c=Math.max(lo,c0-3); c<=Math.min(hi,c0+3); c++){ const v = corr(nat, c); if (v > bs){ bs = v; best = c; } }
+        }
       }
+      const o = k*Hs;
+      for (let j=0;j<N;j++) S[o+j] += win[j]*X[best+j];
+      prev = best;
+      if (k % 400 === 0) self.postMessage({progress: k/frames});
     }
-    const o = k*Hs;
-    for (let j=0;j<N;j++){ const w = win[j]; sL[o+j] += w*L[best+j]; sR[o+j] += w*R[best+j]; }
-    prev = best;
-    if (k % 400 === 0) self.postMessage({progress: k/frames});
-  }
-  const oL = new Float32Array(len), oR = new Float32Array(len);
-  for (let i=0;i<len;i++){
-    const x = i*ratio, i0 = x|0, f = x - i0;
-    if (i0 + 1 >= sLen) break;
-    oL[i] = sL[i0]*(1-f) + sL[i0+1]*f; oR[i] = sR[i0]*(1-f) + sR[i0+1]*f;
-  }
-  self.postMessage({done:true, L:oL, R:oR}, [oL.buffer, oR.buffer]);
+    for (let i=0;i<len;i++){
+      const x = i*ratio, i0 = x|0, f = x - i0;
+      X[i] = i0 + 1 < sLen ? S[i0]*(1-f) + S[i0+1]*f : 0;
+    }
+    self.postMessage({done:true, X}, [X.buffer]);
+  } catch(err){ self.postMessage({error: String(err && err.message || err)}); }
 };`;
-function shiftPitch(L, R, semis, onProg){
+function shiftPitch(X, semis, onProg){
   return new Promise((res, rej) => {
     const w = new Worker(URL.createObjectURL(new Blob([SHIFT_SRC], {type:'text/javascript'})));
-    w.onmessage = e => { if (e.data.progress !== undefined) onProg(e.data.progress); if (e.data.done){ w.terminate(); res(e.data); } };
-    w.onerror = err => { w.terminate(); rej(err); };
-    w.postMessage({L, R, ratio: Math.pow(2, semis/12)}, [L.buffer, R.buffer]);
+    w.onmessage = e => {
+      if (e.data.progress !== undefined) onProg(e.data.progress);
+      if (e.data.error){ w.terminate(); rej(new Error('変換: ' + e.data.error)); }
+      if (e.data.done){ w.terminate(); res(e.data.X); }
+    };
+    w.onerror = err => { w.terminate(); rej(new Error('変換処理: ' + (err.message || 'worker error'))); };
+    w.postMessage({X, ratio: Math.pow(2, semis/12)}, [X.buffer]);
   });
+}
+function wavMono(X, sr){
+  const n = X.length, buf = new ArrayBuffer(44 + n*2), v = new DataView(buf);
+  const w = (o,s) => { for (let i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); };
+  w(0,'RIFF'); v.setUint32(4,36+n*2,true); w(8,'WAVE'); w(12,'fmt ');
+  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,sr,true); v.setUint32(28,sr*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
+  w(36,'data'); v.setUint32(40,n*2,true);
+  for (let i=0, o=44; i<n; i++, o+=2){ const s = Math.max(-1, Math.min(1, X[i])); v.setInt16(o, s*32767, true); }
+  return new Blob([buf], {type:'audio/wav'});
 }
 async function buildAudio(rec, semis, onProg){
   let accUrl = null, vocUrl = null;
-  const sr = semis ? 24000 : 32000;
-  if (rec.accs && rec.accs.length){
-    let m = await mixStems(rec.accs, (p, t) => onProg(0.6 + p*(semis ? 0.1 : 0.4), t), sr);
-    if (semis){ const s = await shiftPitch(m.L, m.R, semis, p => onProg(0.7 + p*0.15, `キー ${semis > 0 ? '+' : ''}${semis} に変えています（伴奏） ${Math.round(p*100)}%`)); m = {L:s.L, R:s.R, sr}; }
-    accUrl = URL.createObjectURL(wavBlob(m.L, m.R, m.sr));
+  if (!semis){
+    if (rec.accs && rec.accs.length){
+      const m = await mixStems(rec.accs, (p, t) => onProg(0.6 + p*0.4, t), 32000);
+      accUrl = URL.createObjectURL(wavBlob(m.L, m.R, m.sr));
+    }
+    return {accUrl, vocUrl: URL.createObjectURL(rec.vocal)};
   }
-  if (semis){
+  const sr = 22050, tag = 'キー ' + (semis > 0 ? '+' : '') + semis + ' に変えています';
+  let step = '伴奏を読み込み中';
+  try {
+    if (rec.accs && rec.accs.length){
+      let m = await mixStems(rec.accs, (p, t) => onProg(0.6 + p*0.1, t), sr);
+      const X = m.L; for (let i=0;i<X.length;i++) X[i] = (X[i] + m.R[i]) * 0.5; m = null;
+      step = '伴奏の変換';
+      const Y = await shiftPitch(X, semis, p => onProg(0.7 + p*0.15, `${tag}（伴奏） ${Math.round(p*100)}%`));
+      accUrl = URL.createObjectURL(wavMono(Y, sr));
+    }
+    step = 'お手本の読み込み';
     const ab = await decode(await rec.vocal.arrayBuffer(), sr);
     const l = ab.getChannelData(0), r = ab.numberOfChannels > 1 ? ab.getChannelData(1) : l;
-    const s = await shiftPitch(new Float32Array(l), new Float32Array(r), semis, p => onProg(0.85 + p*0.15, `キー ${semis > 0 ? '+' : ''}${semis} に変えています（お手本） ${Math.round(p*100)}%`));
-    vocUrl = URL.createObjectURL(wavBlob(s.L, s.R, sr));
-  } else vocUrl = URL.createObjectURL(rec.vocal);
+    const X = new Float32Array(l.length); for (let i=0;i<X.length;i++) X[i] = (l[i] + r[i]) * 0.5;
+    step = 'お手本の変換';
+    const Y = await shiftPitch(X, semis, p => onProg(0.85 + p*0.15, `${tag}（お手本） ${Math.round(p*100)}%`));
+    vocUrl = URL.createObjectURL(wavMono(Y, sr));
+  } catch(e){
+    throw new Error(step + 'で失敗：' + (e && (e.message || e.name) || e));
+  }
   return {accUrl, vocUrl};
 }
 function applyKeyToBars(){
@@ -493,7 +521,9 @@ async function openSong(rec, onProg){
     rec.res = await analyzeVocal(rec.vocal, p => onProg(p*0.6, `音程を解析しています ${Math.round(p*100)}%`));
   }
   S.semi = rec.semi || 0; pendingKey = S.semi;
-  const au = await buildAudio(rec, S.semi, onProg);
+  let au;
+  try { au = await buildAudio(rec, S.semi, onProg); }
+  catch(e){ console.error(e); S.semi = 0; pendingKey = 0; au = await buildAudio(rec, 0, onProg); setTimeout(() => { $('keyMsg').textContent = 'キーを変えられず原曲キーで開きました（' + (e && e.message || e) + '）'; }, 0); }
   onProg(1, '仕上げ中');
   await setupPlayers(au.vocUrl, au.accUrl);
   CUR = rec; applyKeyToBars();
@@ -812,7 +842,7 @@ $('keyGo').onclick = async () => {
     S.semi = pendingKey; CUR.semi = pendingKey; applyKeyToBars(); seek(t); saveCur();
     keyBusy = false; showKey(); flash('キーを ' + fmtKey(S.semi) + ' にしました');
     if (was) play();
-  } catch(e){ console.error(e); keyBusy = false; pendingKey = S.semi || 0; showKey(); $('keyMsg').textContent = 'キーを変えられませんでした。もう一度試してください'; }
+  } catch(e){ console.error(e); keyBusy = false; pendingKey = S.semi || 0; showKey(); $('keyMsg').textContent = 'キーを変えられませんでした（' + (e && e.message || e) + '）'; }
 };
 
 /* ---------- controls ---------- */
