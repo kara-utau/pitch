@@ -103,7 +103,7 @@ textarea{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border
 
 <div class="app">
   <header>
-    <h1>音程バー練習機<small class="ver">v12</small></h1>
+    <h1>音程バー練習機<small class="ver">v13</small></h1>
     <div class="song" id="song">見本表示中</div>
     <button id="openLoad" class="primary">曲</button>
   </header>
@@ -399,9 +399,24 @@ function wavMono(X, sr){
   for (let i=0, o=44; i<n; i++, o+=2){ const s = Math.max(-1, Math.min(1, X[i])); v.setInt16(o, s*32767, true); }
   return new Blob([buf], {type:'audio/wav'});
 }
+async function loadMem(rec){
+  if (rec._mem) return rec._mem;
+  const f = await freshRec(rec);
+  try {
+    rec._mem = {
+      vocal: await f.vocal.arrayBuffer(), vtype: f.vocal.type || 'audio/mp4',
+      accs: await Promise.all((f.accs || []).map(b => b.arrayBuffer()))
+    };
+  } catch(e){ throw new Error('保存した曲データを読めませんでした。「曲」からこの曲を削除して、もう一度ファイルから追加してください（' + (e && (e.message || e.name) || e) + '）'); }
+  return rec._mem;
+}
 async function buildAudio(rec0, semis, onProg){
   let accUrl = null, vocUrl = null;
-  const rec = await freshRec(rec0);
+  const mem = await loadMem(rec0);
+  const rec = {
+    accs: mem.accs.map(ab => ({arrayBuffer: () => Promise.resolve(ab.slice(0))})),
+    vocal: {arrayBuffer: () => Promise.resolve(mem.vocal.slice(0))}
+  };
   if (!semis){
     try {
       if (rec.accs && rec.accs.length){
@@ -409,7 +424,7 @@ async function buildAudio(rec0, semis, onProg){
         accUrl = URL.createObjectURL(wavBlob(m.L, m.R, m.sr));
       }
     } catch(e){ throw new Error('原曲キーの伴奏を読み込み中で失敗：' + (e && (e.message || e.name) || e)); }
-    return {accUrl, vocUrl: URL.createObjectURL(rec.vocal)};
+    return {accUrl, vocUrl: URL.createObjectURL(new Blob([mem.vocal], {type: mem.vtype}))};
   }
   const sr = 22050, tag = 'キー ' + (semis > 0 ? '+' : '') + semis + ' に変えています';
   let step = '伴奏を読み込み中';
@@ -514,7 +529,7 @@ function saveCur(){
     try {
       const f = await DB.get(c.id);
       if (f){ f.ab = c.ab; f.lyrics = c.lyrics; f.semi = c.semi; f.lastUsed = c.lastUsed; f.res = c.res; f.title = c.title; await DB.put(f); }
-      else await DB.put(c);
+      else { const keep = Object.assign({}, c); delete keep._mem; await DB.put(keep); }
     } catch(e){ console.warn(e); }
   });
   return saveChain;
@@ -605,7 +620,7 @@ $('go').onclick = async () => {
       added: Date.now()
     };
     await openSong(rec, setProg);
-    let saved = true; try { await DB.put(rec); } catch(e){ saved = false; }
+    let saved = true; try { const keep = Object.assign({}, rec); delete keep._mem; await DB.put(keep); } catch(e){ saved = false; }
     $('msg').textContent = saved ? `保存しました：次からは上の一覧から開けます（音のかたまり ${S.notes.length} 個）` : '開きましたが、スマホの空き容量が足りず保存できませんでした。';
     renderLib();
     setTimeout(()=>{ $('sheet').hidden = true; }, saved ? 900 : 2500);
