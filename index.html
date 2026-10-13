@@ -66,6 +66,9 @@ button.mic.on{background:var(--me);border-color:var(--me);color:#2a0612}
 .row label{font-size:13px;color:var(--mute)}
 #speed{flex:1;min-width:120px;accent-color:var(--bar)}
 #speedv{font-family:var(--font-dot);min-width:44px;text-align:right}
+.keyrow button{padding:6px 14px}
+#keyv{font-family:var(--font-dot);font-size:17px;min-width:34px;text-align:center;font-variant-numeric:tabular-nums}
+#keyMsg{font-size:12px;color:var(--mute);flex:1;min-width:0}
 .toggles{display:flex;gap:8px;flex-wrap:wrap}
 .toggles button{font-size:13px;padding:6px 10px}
 /* load sheet */
@@ -100,7 +103,7 @@ textarea{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border
 
 <div class="app">
   <header>
-    <h1>音程バー練習機<small class="ver">v6</small></h1>
+    <h1>音程バー練習機<small class="ver">v8</small></h1>
     <div class="song" id="song">見本表示中</div>
     <button id="openLoad" class="primary">曲</button>
   </header>
@@ -133,6 +136,14 @@ textarea{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border
     <label for="speed">速さ</label>
     <input type="range" id="speed" min="50" max="100" step="5" value="100" disabled>
     <span id="speedv">100%</span>
+  </div>
+  <div class="row keyrow">
+    <label>キー</label>
+    <button id="keyDown" disabled aria-label="キーを下げる">−</button>
+    <span id="keyv">0</span>
+    <button id="keyUp" disabled aria-label="キーを上げる">＋</button>
+    <button id="keyGo" class="primary" hidden>このキーにする</button>
+    <span id="keyMsg"></span>
   </div>
   <div class="toggles">
     <button id="mic" class="mic">マイク OFF</button>
@@ -310,8 +321,8 @@ function wavBlob(L, R, sr){
   return new Blob([buf], {type:'audio/wav'});
 }
 
-async function mixStems(files, onProg){
-  const sr = 32000; let L=null, R=null;
+async function mixStems(files, onProg, sr){
+  sr = sr || 32000; let L=null, R=null;
   for (let k=0;k<files.length;k++){
     onProg(k/files.length, `伴奏を重ねています（${k+1}/${files.length}）`);
     const ab = await decode(await files[k].arrayBuffer(), sr);
@@ -325,7 +336,79 @@ async function mixStems(files, onProg){
   }
   let peak=0; for (let i=0;i<L.length;i++){ const a=Math.abs(L[i]), b=Math.abs(R[i]); if(a>peak)peak=a; if(b>peak)peak=b; }
   if (peak > 0.98){ const g=0.98/peak; for (let i=0;i<L.length;i++){ L[i]*=g; R[i]*=g; } }
-  return wavBlob(L, R, sr);
+  return {L, R, sr};
+}
+
+/* ---------- key change: WSOLA time-stretch + resample, in a worker ---------- */
+const SHIFT_SRC = `
+self.onmessage = (e) => {
+  const {L, R, ratio} = e.data, len = L.length;
+  const N = 1024, Hs = 512, tol = 160, Lc = 384;
+  const win = new Float32Array(N); for (let j=0;j<N;j++) win[j] = 0.5 - 0.5*Math.cos(2*Math.PI*j/N);
+  const mono = new Float32Array(len); for (let i=0;i<len;i++) mono[i] = L[i] + R[i];
+  const sLen = Math.ceil(len * ratio) + N;
+  const sL = new Float32Array(sLen), sR = new Float32Array(sLen);
+  const frames = Math.floor((sLen - N) / Hs);
+  let prev = 0;
+  const corr = (a, b) => { let s = 0; for (let j=0;j<Lc;j+=2) s += mono[a+j]*mono[b+j]; return s; };
+  for (let k=0;k<frames;k++){
+    const nominal = Math.round(k*Hs/ratio);
+    if (nominal + N >= len) break;
+    let best = nominal;
+    if (k > 0){
+      const nat = prev + Hs;
+      if (nat + Lc < len){
+        let bs = -Infinity;
+        const lo = Math.max(0, nominal - tol), hi = Math.min(len - N - 1, nominal + tol);
+        for (let c=lo; c<=hi; c+=4){ const v = corr(nat, c); if (v > bs){ bs = v; best = c; } }
+        const c0 = best;
+        for (let c=Math.max(lo,c0-3); c<=Math.min(hi,c0+3); c++){ const v = corr(nat, c); if (v > bs){ bs = v; best = c; } }
+      }
+    }
+    const o = k*Hs;
+    for (let j=0;j<N;j++){ const w = win[j]; sL[o+j] += w*L[best+j]; sR[o+j] += w*R[best+j]; }
+    prev = best;
+    if (k % 400 === 0) self.postMessage({progress: k/frames});
+  }
+  const oL = new Float32Array(len), oR = new Float32Array(len);
+  for (let i=0;i<len;i++){
+    const x = i*ratio, i0 = x|0, f = x - i0;
+    if (i0 + 1 >= sLen) break;
+    oL[i] = sL[i0]*(1-f) + sL[i0+1]*f; oR[i] = sR[i0]*(1-f) + sR[i0+1]*f;
+  }
+  self.postMessage({done:true, L:oL, R:oR}, [oL.buffer, oR.buffer]);
+};`;
+function shiftPitch(L, R, semis, onProg){
+  return new Promise((res, rej) => {
+    const w = new Worker(URL.createObjectURL(new Blob([SHIFT_SRC], {type:'text/javascript'})));
+    w.onmessage = e => { if (e.data.progress !== undefined) onProg(e.data.progress); if (e.data.done){ w.terminate(); res(e.data); } };
+    w.onerror = err => { w.terminate(); rej(err); };
+    w.postMessage({L, R, ratio: Math.pow(2, semis/12)}, [L.buffer, R.buffer]);
+  });
+}
+async function buildAudio(rec, semis, onProg){
+  let accUrl = null, vocUrl = null;
+  const sr = semis ? 24000 : 32000;
+  if (rec.accs && rec.accs.length){
+    let m = await mixStems(rec.accs, (p, t) => onProg(0.6 + p*(semis ? 0.1 : 0.4), t), sr);
+    if (semis){ const s = await shiftPitch(m.L, m.R, semis, p => onProg(0.7 + p*0.15, `キー ${semis > 0 ? '+' : ''}${semis} に変えています（伴奏） ${Math.round(p*100)}%`)); m = {L:s.L, R:s.R, sr}; }
+    accUrl = URL.createObjectURL(wavBlob(m.L, m.R, m.sr));
+  }
+  if (semis){
+    const ab = await decode(await rec.vocal.arrayBuffer(), sr);
+    const l = ab.getChannelData(0), r = ab.numberOfChannels > 1 ? ab.getChannelData(1) : l;
+    const s = await shiftPitch(new Float32Array(l), new Float32Array(r), semis, p => onProg(0.85 + p*0.15, `キー ${semis > 0 ? '+' : ''}${semis} に変えています（お手本） ${Math.round(p*100)}%`));
+    vocUrl = URL.createObjectURL(wavBlob(s.L, s.R, sr));
+  } else vocUrl = URL.createObjectURL(rec.vocal);
+  return {accUrl, vocUrl};
+}
+function applyKeyToBars(){
+  const res = CUR && CUR.res; if (!res) return;
+  const k = S.semi || 0;
+  S.notes = res.notes.map(n => ({s:n.s, e:n.e, p:n.p + k}));
+  S.contour = k ? res.contour.map(v => v === null ? null : v + k) : res.contour;
+  S.hop = res.hop; S.c0 = res.c0; S.songMed = null; Mic.shift = null; Mic.diffs = []; Mic.pts = [];
+  fitRange();
 }
 
 /* ---------- load sheet ---------- */
@@ -409,15 +492,11 @@ async function openSong(rec, onProg){
     onProg(0, 'ボーカルを解析しています');
     rec.res = await analyzeVocal(rec.vocal, p => onProg(p*0.6, `音程を解析しています ${Math.round(p*100)}%`));
   }
-  let accUrl = null;
-  if (rec.accs && rec.accs.length){
-    const blob = await mixStems(rec.accs, (p, t) => onProg(0.6 + p*0.4, t));
-    accUrl = URL.createObjectURL(blob);
-  }
+  S.semi = rec.semi || 0; pendingKey = S.semi;
+  const au = await buildAudio(rec, S.semi, onProg);
   onProg(1, '仕上げ中');
-  await setupPlayers(URL.createObjectURL(rec.vocal), accUrl);
-  const res = rec.res;
-  S.notes = res.notes; S.contour = res.contour; S.hop = res.hop; S.c0 = res.c0; S.songMed = null; Mic.shift = null; Mic.diffs = [];
+  await setupPlayers(au.vocUrl, au.accUrl);
+  CUR = rec; applyKeyToBars();
   S.demo = false; S.key = rec.id; S.t = 0; Mic.pts = [];
   const ab = rec.ab || {};
   S.A = ab.A ?? null; S.B = ab.B ?? null; S.loop = !!(ab.loop && S.A!==null && S.B!==null);
@@ -686,12 +765,13 @@ function micTick(){
       let m = Mic.stable;
       if (Mic.fold){
         const tg = noteAt(tNow);
-        if (tg){ Mic.diffs.push(tg.p - m); if (Mic.diffs.length > 150) Mic.diffs.shift(); }
-        if (Mic.diffs.length >= 20){
-          const want = 12*Math.round(median(Mic.diffs)/12);
-          if (Mic.shift == null) Mic.shift = want;
-          else if (want !== Mic.shift){ if (++Mic.shiftVote > 120){ Mic.shift = want; Mic.shiftVote = 0; } }
-          else Mic.shiftVote = 0;
+        if (tg){
+          if (Mic.shift == null) Mic.shift = 12*Math.round((tg.p - Mic.stable)/12);
+          const d = tg.p - (Mic.stable + Mic.shift);
+          const alt = Mic.shift + 12*Math.round(d/12);
+          if (alt !== Mic.shift && Math.abs(tg.p - (Mic.stable + alt)) <= 4){
+            if (++Mic.shiftVote >= 15){ Mic.shift = alt; Mic.shiftVote = 0; }
+          } else Mic.shiftVote = 0;
         }
         m += Mic.shift || 0;
       }
@@ -707,14 +787,37 @@ function micTick(){
   if (Mic.cur === null){ J.className='judge'; J.textContent = tgt ? '声を出してください' : '…'; return; }
   const name = NAMES[((Math.round(Mic.cur)%12)+12)%12];
   if (!tgt){ J.className='judge'; J.textContent = name; return; }
-  const diff = Mic.cur - tgt.p;
+  let diff = Mic.cur - tgt.p;
+  if (Mic.fold) diff = ((diff + 6) % 12 + 12) % 12 - 6;
   if (Math.abs(diff) <= Mic.tol){ J.className='judge ok'; J.textContent = name + '　ぴったり'; }
   else { J.className='judge off'; J.textContent = name + '　' + Math.abs(diff).toFixed(1) + (diff > 0 ? ' 高い' : ' 低い'); }
 }
 
+/* ---------- key controls ---------- */
+let pendingKey = 0, keyBusy = false;
+const fmtKey = k => (k > 0 ? '+' : '') + k;
+function showKey(){
+  $('keyv').textContent = fmtKey(pendingKey);
+  $('keyGo').hidden = pendingKey === (S.semi || 0) || keyBusy;
+  if (!keyBusy) $('keyMsg').textContent = pendingKey === (S.semi || 0) ? (S.semi ? '原曲から' + fmtKey(S.semi) : '原曲キー') : '押すと変わります';
+}
+$('keyDown').onclick = () => { if (keyBusy) return; pendingKey = Math.max(-7, pendingKey - 1); showKey(); };
+$('keyUp').onclick = () => { if (keyBusy) return; pendingKey = Math.min(7, pendingKey + 1); showKey(); };
+$('keyGo').onclick = async () => {
+  if (!CUR || keyBusy) return;
+  keyBusy = true; const was = S.playing; pause(); const t = S.t; showKey();
+  try {
+    const au = await buildAudio(CUR, pendingKey, (p, txt) => { $('keyMsg').textContent = txt || ('準備中 ' + Math.round(p*100) + '%'); });
+    await setupPlayers(au.vocUrl, au.accUrl);
+    S.semi = pendingKey; CUR.semi = pendingKey; applyKeyToBars(); seek(t); saveCur();
+    keyBusy = false; showKey(); flash('キーを ' + fmtKey(S.semi) + ' にしました');
+    if (was) play();
+  } catch(e){ console.error(e); keyBusy = false; pendingKey = S.semi || 0; showKey(); $('keyMsg').textContent = 'キーを変えられませんでした。もう一度試してください'; }
+};
+
 /* ---------- controls ---------- */
 function enable(on){
-  ['back','play','fwd','setA','setB','loop','speed','guide','clearAB','openLyr'].forEach(id => $(id).disabled = !on);
+  ['back','play','fwd','setA','setB','loop','speed','guide','clearAB','openLyr','keyDown','keyUp'].forEach(id => $(id).disabled = !on);
   $('guide').disabled = !on || !S.slave;
 }
 $('play').onclick = () => S.playing ? pause() : play();
@@ -762,6 +865,7 @@ function refreshUI(){
   $('contour').classList.toggle('on', S.showContour); $('contour').textContent = '細い線 ' + (S.showContour ? 'ON' : 'OFF');
   $('tdur').textContent = fmt(S.dur, false);
   $('mic').classList.toggle('on', Mic.on); $('mic').textContent = 'マイク ' + (Mic.on ? 'ON' : 'OFF');
+  showKey();
   $('lat').textContent = '遅れ補正 ' + Mic.lat.toFixed(2).replace(/0$/,'') + '秒';
   $('fold').classList.toggle('on', Mic.fold); $('fold').textContent = Mic.fold ? 'オクターブ違いOK' : 'オクターブも判定';
 }
@@ -823,7 +927,7 @@ function drawRoll(){
     const y = yOf(n.p) + rh*0.14, hh = rh*0.72;
     const isNow = n.s <= S.t && n.e >= S.t;
     if (isNow) current = n;
-    const tl = S.t - Mic.lat; const hit = Mic.on && Mic.cur !== null && n.s <= tl && n.e >= tl && Math.abs(Mic.cur - n.p) <= Mic.tol;
+    const tl = S.t - Mic.lat; const hit = Mic.on && Mic.cur !== null && n.s <= tl && n.e >= tl && Math.abs(Mic.fold ? (((Mic.cur - n.p) + 6) % 12 + 12) % 12 - 6 : Mic.cur - n.p) <= Mic.tol;
     ctx.fillStyle = hit ? C['--hit'] : n.e < S.t ? C['--bar-past'] : C['--bar'];
     if (isNow){ ctx.shadowColor = hit ? C['--hit'] : C['--bar']; ctx.shadowBlur = 14*dpr; }
     rr(ctx, x, y, Math.max(2*dpr, x2-x), hh, 4*dpr); ctx.fill();
