@@ -43,7 +43,7 @@ button.primary{background:var(--bar);color:#221a08;border-color:var(--bar);font-
 button.on{background:var(--now);color:#0c2420;border-color:var(--now);font-weight:700}
 .stage{position:relative;flex:1;min-height:200px;border-radius:12px;overflow:hidden;background:#101120;border:1px solid var(--line)}
 #roll{display:block;width:100%;height:100%;touch-action:none}
-.judge{position:absolute;top:8px;left:48px;font-family:var(--font-dot);font-size:15px;padding:3px 10px;border-radius:8px;background:rgba(16,17,32,.8);color:var(--mute);font-variant-numeric:tabular-nums}
+.judge{position:absolute;top:8px;left:48px;right:8px;width:fit-content;max-width:calc(100% - 56px);font-family:var(--font-dot);font-size:15px;padding:3px 10px;border-radius:8px;background:rgba(16,17,32,.8);color:var(--mute);font-variant-numeric:tabular-nums}
 .judge.ok{color:var(--hit)}
 .judge.off{color:var(--me)}
 button.mic.on{background:var(--me);border-color:var(--me);color:#2a0612}
@@ -81,6 +81,19 @@ select{font:inherit;font-size:13px;color:var(--fg);background:var(--panel);borde
 #msg{min-height:1.2em;color:var(--fg)}
 .pick{position:relative;overflow:hidden;display:inline-block}
 .pick input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.lyr{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 12px;min-height:58px;display:flex;flex-direction:column;justify-content:center;gap:2px;box-sizing:border-box;user-select:none;-webkit-user-select:none}
+.lyr .cur{font-size:19px;font-weight:700;line-height:1.35;overflow-wrap:anywhere}
+.lyr .nxt{font-size:13px;color:var(--mute);overflow-wrap:anywhere}
+.lyr.timing{border-color:var(--bar);background:#2a2618;cursor:pointer}
+.lyr.timing .cur{color:var(--bar)}
+textarea{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px;min-height:200px;resize:vertical;box-sizing:border-box;width:100%}
+.lib{display:flex;flex-direction:column;gap:6px}
+.libitem{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
+.libitem .open{text-align:left;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.libitem .open.now{border-color:var(--now)}
+.libitem .del{font-size:12px;padding:6px 10px;color:var(--mute)}
+.libitem .del.arm{color:#2a0612;background:var(--me);border-color:var(--me)}
+.card h3{margin:4px 0 0;font-size:14px;color:var(--mute);font-weight:500}
 @media (prefers-reduced-motion:reduce){.prog i{transition:none}}
 </style>
 
@@ -88,7 +101,7 @@ select{font:inherit;font-size:13px;color:var(--fg);background:var(--panel);borde
   <header>
     <h1>音程バー練習機</h1>
     <div class="song" id="song">見本表示中</div>
-    <button id="openLoad" class="primary">曲を読み込む</button>
+    <button id="openLoad" class="primary">曲</button>
   </header>
 
   <div class="stage">
@@ -97,6 +110,8 @@ select{font:inherit;font-size:13px;color:var(--fg);background:var(--panel);borde
     <div class="judge" id="judge" hidden></div>
     <div class="zoom"><button id="zout" aria-label="縮小">−</button><button id="zin" aria-label="拡大">＋</button></div>
   </div>
+
+  <div class="lyr" id="lyr" hidden><div class="cur" id="lyrCur"></div><div class="nxt" id="lyrNxt"></div></div>
 
   <canvas id="over" aria-label="曲全体。タップで移動"></canvas>
   <div class="timebar"><b id="tnow">0:00.0</b><span id="tdur">0:00</span></div>
@@ -122,6 +137,7 @@ select{font:inherit;font-size:13px;color:var(--fg);background:var(--panel);borde
     <button id="mic" class="mic">マイク OFF</button>
     <button id="fold" class="on">オクターブ違いOK</button>
     <button id="guide" disabled>お手本の声 OFF</button>
+    <button id="openLyr" disabled>歌詞</button>
     <button id="contour" class="on">細い線 ON</button>
     <button id="clearAB" disabled>A・B解除</button>
   </div>
@@ -129,8 +145,11 @@ select{font:inherit;font-size:13px;color:var(--fg);background:var(--panel);borde
 
 <div class="sheet" id="sheet" hidden>
   <div class="card">
-    <h2>曲を読み込む</h2>
-    <p>Moisesで書き出したファイルを<b>まとめて全部</b>選んでください。名前に「ボーカル」が入ったものを音程バーにし、残りは伴奏として重ねて鳴らします。ファイルはこのスマホの中だけで処理されます。</p>
+    <h2>曲</h2>
+    <h3>保存した曲</h3>
+    <div class="lib" id="lib"><p>まだ保存した曲はありません。下の「ファイルを選ぶ」から追加すると、次からはここをタップするだけで開けます。</p></div>
+    <h3>新しい曲を追加</h3>
+    <p>Moisesで書き出したファイルを<b>まとめて全部</b>選んでください。名前に「ボーカル」が入ったものを音程バーにし、残りは伴奏として重ねて鳴らします。ファイルはこのスマホの中にだけ保存されます。</p>
     <span class="pick"><button class="primary" type="button">ファイルを選ぶ</button><input type="file" id="fileIn" multiple accept="audio/*,.m4a,.mp3,.wav,.aac"></span>
     <div class="files" id="files"></div>
     <div class="prog"><i id="progBar"></i></div>
@@ -139,7 +158,22 @@ select{font:inherit;font-size:13px;color:var(--fg);background:var(--panel);borde
       <button id="go" class="primary" disabled>音程バーを作る</button>
       <button id="closeLoad">閉じる</button>
     </div>
-    <p>イヤホンで伴奏を聴きながら歌うのがおすすめです。初回の解析は1曲あたり数秒〜十数秒かかります。2回目以降、同じボーカルファイルなら解析結果を再利用します。</p>
+    <p>イヤホンで伴奏を聴きながら歌うのがおすすめです。初回の解析は1曲あたり数秒〜十数秒かかります。保存した曲は、開くたびに伴奏を重ねる数秒だけで使えます。</p>
+  </div>
+</div>
+
+<div class="sheet" id="lsheet" hidden>
+  <div class="card">
+    <h2>歌詞</h2>
+    <p>メモ帳からコピーした歌詞を貼り付けてください。1行が画面の1行になります。保存すると、音程バーの息継ぎに合わせて自動で行を割り当てます。</p>
+    <textarea id="lyrText" placeholder="ここを長押しして「ペースト」"></textarea>
+    <div class="row">
+      <button id="lyrSave" class="primary">保存</button>
+      <button id="lyrTime">タイミングを合わせる</button>
+      <button id="lyrClose">閉じる</button>
+    </div>
+    <p>ズレていたら「タイミングを合わせる」を押してください。今の再生位置から曲が流れるので、各行の歌い始めで歌詞の欄をタップします。曲の途中から合わせたいときは、先にその少し前へ移動してから押してください。</p>
+    <div id="lyrMsg"></div>
   </div>
 </div>
 
@@ -294,10 +328,10 @@ async function mixStems(files, onProg){
 
 /* ---------- load sheet ---------- */
 let picked = [];
-const roleOf = name => /ボーカル|ヴォーカル|vocal|voice|歌/i.test(name) ? 'vocal'
-  : /メトロノーム|metronome|click/i.test(name) ? 'skip' : 'acc';
+const roleOf = raw => { const name = raw.normalize('NFC'); return /ボーカル|ヴォーカル|vocal|voice|歌/i.test(name) ? 'vocal'
+  : /メトロノーム|metronome|click/i.test(name) ? 'skip' : 'acc'; };
 const partName = name => {
-  const m = name.match(/_([^_]+?)\d*_mixed/i);
+  const m = name.normalize('NFC').match(/_([^_]+?)\d*_mixed/i);
   return m ? m[1] : name;
 };
 
@@ -326,45 +360,210 @@ function checkGo(){
 }
 const setProg = (p, text) => { $('progBar').style.width = Math.round(p*100)+'%'; if (text) $('msg').textContent = text; };
 
+/* ---------- song library (IndexedDB, this phone only) ---------- */
+const DB = {
+  db: null,
+  open(){
+    if (this.db) return Promise.resolve(this.db);
+    return new Promise((res, rej) => {
+      let r; try { r = indexedDB.open('pitchbar', 1); } catch(e){ rej(e); return; }
+      r.onupgradeneeded = () => { r.result.createObjectStore('songs', {keyPath:'id'}); };
+      r.onsuccess = () => { this.db = r.result; res(this.db); };
+      r.onerror = () => rej(r.error);
+    });
+  },
+  async tx(mode, fn){
+    const db = await this.open();
+    return new Promise((res, rej) => {
+      const t = db.transaction('songs', mode), st = t.objectStore('songs');
+      const req = fn(st); let out;
+      if (req) req.onsuccess = () => { out = req.result; };
+      t.oncomplete = () => res(out); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+    });
+  },
+  get(id){ return this.tx('readonly', s => s.get(id)); },
+  all(){ return this.tx('readonly', s => s.getAll()); },
+  put(rec){ return this.tx('readwrite', s => s.put(rec)); },
+  del(id){ return this.tx('readwrite', s => s.delete(id)); }
+};
+try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch(e){}
+let CUR = null;
+const titleOf = name => name.normalize('NFC').replace(/_[^_]*_mixed\.\w+$/,'').replace(/\.\w+$/,'');
+const toBlob = async f => new Blob([await f.arrayBuffer()], {type: f.type || 'audio/mp4'});
+async function saveCur(){ if (!CUR) return; try { await DB.put(CUR); } catch(e){ console.warn(e); } }
+
+async function analyzeVocal(blob, onProg){
+  const ab = await decode(await blob.arrayBuffer(), 16000);
+  const a = ab.getChannelData(0), b = ab.numberOfChannels>1 ? ab.getChannelData(1) : a;
+  const x = new Float32Array(a.length); for (let i=0;i<a.length;i++) x[i]=(a[i]+b[i])*0.5;
+  const r = await analyze(x, 16000, onProg);
+  const built = buildNotes(r.f0, r.hop, r.c0);
+  return {notes: built.notes, contour: built.contour, hop: r.hop, c0: r.c0};
+}
+
+async function openSong(rec, onProg){
+  onProg = onProg || (()=>{});
+  if (!rec.res){
+    onProg(0, 'ボーカルを解析しています');
+    rec.res = await analyzeVocal(rec.vocal, p => onProg(p*0.6, `音程を解析しています ${Math.round(p*100)}%`));
+  }
+  let accUrl = null;
+  if (rec.accs && rec.accs.length){
+    const blob = await mixStems(rec.accs, (p, t) => onProg(0.6 + p*0.4, t));
+    accUrl = URL.createObjectURL(blob);
+  }
+  onProg(1, '仕上げ中');
+  await setupPlayers(URL.createObjectURL(rec.vocal), accUrl);
+  const res = rec.res;
+  S.notes = res.notes; S.contour = res.contour; S.hop = res.hop; S.c0 = res.c0;
+  S.demo = false; S.key = rec.id; S.t = 0; Mic.pts = [];
+  const ab = rec.ab || {};
+  S.A = ab.A ?? null; S.B = ab.B ?? null; S.loop = !!(ab.loop && S.A!==null && S.B!==null);
+  CUR = rec; rec.lastUsed = Date.now();
+  store.set('last', rec.id);
+  $('song').textContent = rec.title;
+  $('badge').hidden = true;
+  enable(true); fitRange(); setLyrics(rec.lyrics); refreshUI();
+  saveCur().then(renderLib);
+}
+
+async function renderLib(){
+  const box = $('lib');
+  let list = [];
+  try { list = await DB.all(); } catch(e){ return; }
+  if (!list.length) return;
+  list.sort((a,b) => (b.lastUsed||0) - (a.lastUsed||0));
+  box.textContent = '';
+  list.forEach(rec => {
+    const row = document.createElement('div'); row.className = 'libitem';
+    const op = document.createElement('button'); op.className = 'open' + (CUR && CUR.id === rec.id ? ' now' : '');
+    op.textContent = rec.title + (rec.lyrics && rec.lyrics.lines.length ? '　♪歌詞あり' : '');
+    op.onclick = async () => {
+      if (CUR && CUR.id === rec.id){ $('sheet').hidden = true; return; }
+      $('sheet').hidden = false; op.disabled = true;
+      try { await openSong(rec, setProg); $('msg').textContent = '開きました'; setTimeout(()=>{ $('sheet').hidden = true; }, 400); }
+      catch(e){ console.error(e); $('msg').textContent = 'この曲を開けませんでした。削除して、もう一度ファイルから追加してください。'; }
+      op.disabled = false;
+    };
+    const del = document.createElement('button'); del.className = 'del'; del.textContent = '削除';
+    del.onclick = async () => {
+      if (!del.classList.contains('arm')){ del.classList.add('arm'); del.textContent = '本当に削除'; setTimeout(()=>{ del.classList.remove('arm'); del.textContent='削除'; }, 3000); return; }
+      try { await DB.del(rec.id); } catch(e){}
+      if (CUR && CUR.id === rec.id) CUR = null;
+      row.remove();
+      if (!box.children.length) box.innerHTML = '<p>まだ保存した曲はありません。</p>';
+    };
+    row.append(op, del); box.appendChild(row);
+  });
+}
+
 $('go').onclick = async () => {
   $('go').disabled = true;
   try {
-    const vocal = picked.find(p=>p.role==='vocal').f;
-    const accs = picked.filter(p=>p.role==='acc').map(p=>p.f);
-    const key = 'pitch:' + vocal.name + ':' + vocal.size;
-    let res = store.get(key);
-    if (!res){
-      setProg(0, 'ボーカルを読み込んでいます');
-      const ab = await decode(await vocal.arrayBuffer(), 16000);
-      const a = ab.getChannelData(0), b = ab.numberOfChannels>1 ? ab.getChannelData(1) : a;
-      const x = new Float32Array(a.length); for (let i=0;i<a.length;i++) x[i]=(a[i]+b[i])*0.5;
-      const r = await analyze(x, 16000, p => setProg(p*0.6, `音程を解析しています ${Math.round(p*100)}%`));
-      const built = buildNotes(r.f0, r.hop, r.c0);
-      res = {notes: built.notes, contour: built.contour, hop: r.hop, c0: r.c0};
-      store.set(key, res);
-    }
-    let accUrl = null;
-    if (accs.length){
-      const blob = await mixStems(accs, (p, t) => setProg(0.6 + p*0.4, t));
-      accUrl = URL.createObjectURL(blob);
-    }
-    setProg(1, '仕上げ中');
-    await setupPlayers(URL.createObjectURL(vocal), accUrl);
-    S.notes = res.notes; S.contour = res.contour; S.hop = res.hop; S.c0 = res.c0;
-    S.demo = false; S.key = key; S.t = 0;
-    const ab = store.get('ab:'+key) || {};
-    S.A = ab.A ?? null; S.B = ab.B ?? null; S.loop = !!(ab.loop && S.A!==null && S.B!==null);
-    $('song').textContent = vocal.name.replace(/_[^_]*_mixed\.\w+$/,'').replace(/\.\w+$/,'');
-    $('badge').hidden = true;
-    enable(true); fitRange(); refreshUI();
-    $('msg').textContent = `完了：音のかたまり ${S.notes.length} 個を見つけました。`;
-    setTimeout(()=>{ $('sheet').hidden = true; }, 600);
+    const vocalF = picked.find(p=>p.role==='vocal').f;
+    const accF = picked.filter(p=>p.role==='acc').map(p=>p.f);
+    const id = vocalF.name.normalize('NFC') + ':' + vocalF.size;
+    setProg(0, 'ファイルを読み込んでいます');
+    let old = null; try { old = await DB.get(id); } catch(e){}
+    const rec = {
+      id, title: titleOf(vocalF.name),
+      vocal: await toBlob(vocalF),
+      accs: await Promise.all(accF.map(toBlob)),
+      res: old ? old.res : (store.get('pitch:' + vocalF.name + ':' + vocalF.size) || null),
+      lyrics: old ? old.lyrics : null,
+      ab: old ? old.ab : null,
+      added: Date.now()
+    };
+    await openSong(rec, setProg);
+    let saved = true; try { await DB.put(rec); } catch(e){ saved = false; }
+    $('msg').textContent = saved ? `保存しました：次からは上の一覧から開けます（音のかたまり ${S.notes.length} 個）` : '開きましたが、スマホの空き容量が足りず保存できませんでした。';
+    renderLib();
+    setTimeout(()=>{ $('sheet').hidden = true; }, saved ? 900 : 2500);
   } catch(err){
     console.error(err);
     $('msg').textContent = 'ファイルを読み込めませんでした。m4a・mp3・wavのいずれかか確認して、もう一度選び直してください。';
-    $('go').disabled = false;
   }
+  $('go').disabled = false;
 };
+
+/* ---------- lyrics ---------- */
+const LY = {lines: [], times: [], timing: false, k: 0, shown: -2};
+function phraseStarts(){
+  const st = []; let prevE = -9;
+  for (const n of S.notes){ if (n.s - prevE > 0.6) st.push(n.s); prevE = Math.max(prevE, n.e); }
+  return st;
+}
+function autoTimes(lines){
+  const st = phraseStarts(), out = [];
+  for (let i=0;i<lines.length;i++) out.push(st[i] ?? (i ? out[i-1] + 3 : 0));
+  return out;
+}
+function setLyrics(ly){
+  LY.lines = ly ? ly.lines.slice() : []; LY.times = ly ? ly.times.slice() : [];
+  LY.timing = false; LY.shown = -2;
+  $('lyr').hidden = !LY.lines.length; $('lyr').classList.remove('timing');
+  $('lyrText').value = LY.lines.join('\n');
+}
+function lineAt(t){
+  let idx = -1;
+  for (let i=0;i<LY.times.length;i++){ if (LY.times[i] != null && LY.times[i] <= t + 0.3) idx = i; else if (LY.times[i] > t + 0.3) break; }
+  return idx;
+}
+function drawLyrics(){
+  if (!LY.lines.length) return;
+  if (LY.timing){
+    $('lyrCur').textContent = LY.k < LY.lines.length ? 'タップ ▶ ' + LY.lines[LY.k] : '最後まで合わせました。タップで終了';
+    $('lyrNxt').textContent = LY.lines[LY.k+1] || '';
+    return;
+  }
+  const i = lineAt(S.t);
+  if (i === LY.shown) return;
+  LY.shown = i;
+  $('lyrCur').textContent = i >= 0 ? LY.lines[i] : '';
+  $('lyrNxt').textContent = LY.lines[i+1] || '';
+}
+async function saveLyrics(){
+  if (!CUR) return;
+  CUR.lyrics = LY.lines.length ? {lines: LY.lines.slice(), times: LY.times.slice()} : null;
+  await saveCur(); renderLib();
+}
+$('openLyr').onclick = () => { $('lyrText').value = LY.lines.join('\n'); $('lyrMsg').textContent = ''; $('lsheet').hidden = false; };
+$('lyrClose').onclick = () => { $('lsheet').hidden = true; };
+$('lyrSave').onclick = async () => {
+  const lines = $('lyrText').value.normalize('NFC').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  if (!lines.length){ LY.lines = []; LY.times = []; $('lyr').hidden = true; await saveLyrics(); $('lyrMsg').textContent = '歌詞を消しました'; return; }
+  const same = lines.length === LY.lines.length && LY.times.length === lines.length;
+  LY.lines = lines; if (!same) LY.times = autoTimes(lines);
+  LY.shown = -2; $('lyr').hidden = false;
+  await saveLyrics();
+  $('lyrMsg').textContent = same ? '保存しました（タイミングはそのまま）' : `保存しました。${lines.length}行を自動で割り当てました。ズレていたら「タイミングを合わせる」へ`;
+  setTimeout(()=>{ $('lsheet').hidden = true; }, 1200);
+};
+$('lyrTime').onclick = async () => {
+  if (!LY.lines.length){ $('lyrMsg').textContent = '先に歌詞を貼り付けて「保存」を押してください'; return; }
+  let k = LY.times.findIndex(t => t == null || t >= S.t - 0.5);
+  LY.k = k < 0 ? LY.lines.length : k;
+  LY.timing = true; $('lyr').classList.add('timing'); $('lsheet').hidden = true;
+  if (S.loop){ S.loop = false; saveAB(); }
+  if (!S.playing) play();
+};
+$('lyr').addEventListener('pointerdown', async () => {
+  if (!LY.timing) return;
+  if (LY.k >= LY.lines.length){
+    LY.timing = false; LY.shown = -2; $('lyr').classList.remove('timing'); await saveLyrics(); flash('歌詞のタイミングを保存しました'); return;
+  }
+  LY.times[LY.k] = Math.max(0, round1(S.t - 0.15));
+  for (let j = LY.k + 1; j < LY.times.length; j++){ if (LY.times[j] != null && LY.times[j] <= LY.times[LY.k]) LY.times[j] = null; else break; }
+  LY.k++;
+  if (LY.k >= LY.lines.length){ LY.timing = false; LY.shown = -2; $('lyr').classList.remove('timing'); await saveLyrics(); flash('歌詞のタイミングを保存しました'); }
+});
+async function bootLast(){
+  let id = store.get('last'), rec = null;
+  try { await renderLib(); if (id) rec = await DB.get(id); } catch(e){ return; }
+  if (!rec) return;
+  $('song').textContent = rec.title + '　読み込み中…';
+  try { await openSong(rec); } catch(e){ console.error(e); $('song').textContent = '前回の曲を開けませんでした。「曲」から選んでください'; }
+}
 
 /* ---------- players ---------- */
 function mkAudio(url){
@@ -400,11 +599,10 @@ async function play(){
   if (!S.master) return;
   if (S.loop && S.A!==null && S.B!==null && (S.t < S.A || S.t >= S.B)) seek(S.A);
   each(el => { el.currentTime = S.t; });
-  try {
-    await S.master.play();
-    if (S.slave){ S.slave.currentTime = S.master.currentTime; await S.slave.play(); }
-    S.playing = true;
-  } catch(e){ S.playing = false; }
+  micRevive();
+  try { await S.master.play(); } catch(e){}
+  if (S.slave){ try { S.slave.currentTime = S.master.currentTime; await S.slave.play(); } catch(e){} }
+  S.playing = !S.master.paused;
   refreshUI();
 }
 function pause(){ each(el => el.pause()); S.playing = false; refreshUI(); }
@@ -419,10 +617,10 @@ function micPitch(){
   for (let i=0;i<n;i++){ let s=0; for (let k=0;k<dec;k++) s+=Mic.buf[i*dec+k]; x[i]=s/dec; }
   const tauMin = Math.floor(fs/1000), tauMax = Math.ceil(fs/70), W = Math.min(400, n - tauMax - 2);
   let e=0; for (let j=0;j<W;j++) e+=x[j]*x[j];
-  if (Math.sqrt(e/W) < 0.008) return null;
+  if (Math.sqrt(e/W) < 0.004) return null;
   const d = new Float32Array(tauMax+2); d[0]=1; let run=0, found=-1;
   for (let tau=1; tau<=tauMax+1; tau++){ let s=0; for (let j=0;j<W;j++){ const v=x[j]-x[j+tau]; s+=v*v; } run+=s; d[tau]= run>0 ? s*tau/run : 1; }
-  for (let tau=tauMin; tau<tauMax; tau++){ if (d[tau] < 0.2){ while (tau+1<tauMax && d[tau+1]<d[tau]) tau++; found=tau; break; } }
+  for (let tau=tauMin; tau<tauMax; tau++){ if (d[tau] < 0.15){ while (tau+1<tauMax && d[tau+1]<d[tau]) tau++; found=tau; break; } }
   if (found < 0) return null;
   let t=found; const a=d[t-1], b=d[t], c=d[t+1], den=a-2*b+c; if (den!==0) t += 0.5*(a-c)/den;
   return 69 + 12*Math.log2((fs/t)/440);
@@ -447,18 +645,41 @@ async function micToggle(){
   } catch(e){ flash('マイクを使えませんでした。設定でマイクを許可してください'); }
   refreshUI();
 }
+function micAlive(){
+  const tr = Mic.stream && Mic.stream.getAudioTracks()[0];
+  return !!(tr && tr.readyState === 'live' && !tr.muted);
+}
+async function micRevive(){
+  if (!Mic.on) return;
+  if (!micAlive()){ Mic.on = false; try { Mic.ctx.close(); } catch(e){} await micToggle(); return; }
+  if (Mic.ctx && Mic.ctx.state !== 'running'){ try { await Mic.ctx.resume(); } catch(e){} }
+}
 function micTick(){
   const J = $('judge');
   if (!Mic.on){ J.hidden = true; return; }
-  let m = micPitch();
-  if (m === null){ Mic.hist = []; Mic.cur = null; }
-  else {
-    Mic.hist.push(m); if (Mic.hist.length > 3) Mic.hist.shift();
-    m = median(Mic.hist);
+  if (!micAlive() || Mic.ctx.state !== 'running'){
+    J.hidden = false; J.className = 'judge off'; J.textContent = 'マイクが止まりました。再生ボタンかマイクを押し直してください';
+    Mic.cur = null; return;
+  }
+  const raw = micPitch();
+  if (raw === null){
+    Mic.vcount = 0; Mic.ucount = (Mic.ucount||0) + 1;
+    if (Mic.ucount > 5){ Mic.hist = []; Mic.ema = null; Mic.cur = null; }
+  } else {
+    Mic.ucount = 0; Mic.vcount = (Mic.vcount||0) + 1;
+    Mic.hist.push(raw); if (Mic.hist.length > 7) Mic.hist.shift();
+    const med = median(Mic.hist);
+    if (Mic.ema == null) Mic.ema = med;
+    else if (Math.abs(med - Mic.ema) > 2.5 && (Mic.jump = (Mic.jump||0) + 1) < 6) { /* ignore brief spikes */ }
+    else { Mic.jump = 0; Mic.ema += 0.2 * (med - Mic.ema); }
+    let m = Mic.ema;
     const tgt = noteAt(S.t);
-    if (Mic.fold && tgt) m += 12*Math.round((tgt.p - m)/12);
-    Mic.cur = m;
-    if (S.playing && !S.demo){
+    if (Mic.fold){
+      if (tgt) Mic.shift = 12*Math.round((tgt.p - m)/12);
+      m += Mic.shift || 0;
+    }
+    Mic.cur = Mic.vcount >= 3 || Mic.cur !== null ? m : null;
+    if (Mic.cur !== null && S.playing && !S.demo){
       const last = Mic.pts[Mic.pts.length-1];
       if (!last || S.t - last.t > 0.012) Mic.pts.push({t:S.t, m});
     }
@@ -475,7 +696,7 @@ function micTick(){
 
 /* ---------- controls ---------- */
 function enable(on){
-  ['back','play','fwd','setA','setB','loop','speed','guide','clearAB'].forEach(id => $(id).disabled = !on);
+  ['back','play','fwd','setA','setB','loop','speed','guide','clearAB','openLyr'].forEach(id => $(id).disabled = !on);
   $('guide').disabled = !on || !S.slave;
 }
 $('play').onclick = () => S.playing ? pause() : play();
@@ -509,7 +730,7 @@ function nudge(which, d){
   saveAB(); refreshUI();
 }
 const round1 = t => Math.round(t*10)/10;
-function saveAB(){ if (S.key) store.set('ab:'+S.key, {A:S.A, B:S.B, loop:S.loop}); }
+function saveAB(){ if (CUR){ CUR.ab = {A:S.A, B:S.B, loop:S.loop}; saveCur(); } }
 let flashT=0;
 function flash(t){ const el=$('song'); const old=el.dataset.old ?? el.textContent; el.dataset.old=old; el.textContent=t; el.style.color='var(--ab)'; clearTimeout(flashT); flashT=setTimeout(()=>{ el.textContent=old; el.style.color=''; delete el.dataset.old; },1600); }
 
@@ -672,6 +893,11 @@ roll.addEventListener('pointercancel', () => { drag = null; });
 
 /* main loop */
 function tick(){
+  if (S.master){
+    const actual = !S.master.paused && !S.master.ended;
+    if (actual !== S.playing){ S.playing = actual; refreshUI(); }
+    if (S.playing && S.slave && S.slave.paused){ try { S.slave.play(); } catch(e){} }
+  }
   if (S.playing && S.master){
     S.t = S.master.currentTime;
     if (S.loop && S.A!==null && S.B!==null && S.t >= S.B){ seek(S.A); }
@@ -679,12 +905,13 @@ function tick(){
   }
   $('tnow').textContent = fmt(S.t, true);
   micTick();
+  drawLyrics();
   drawRoll(); drawOver();
   requestAnimationFrame(tick);
 }
 refreshUI();
-if (document.fonts && document.fonts.ready) document.fonts.ready.then(()=>{});
 requestAnimationFrame(tick);
+bootLast();
 })();
 </script>
 
