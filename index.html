@@ -48,6 +48,7 @@ button.on{background:var(--now);color:#0c2420;border-color:var(--now);font-weigh
 .judge.ok{color:var(--hit)}
 .judge.off{color:var(--me)}
 button.mic.on{background:var(--me);border-color:var(--me);color:#2a0612}
+.octb{position:absolute;left:48px;bottom:8px;max-width:calc(100% - 150px);font-size:11px;line-height:1.4;padding:3px 8px;border-radius:8px;background:rgba(255,95,134,.18);color:var(--me)}
 .badge{position:absolute;top:8px;right:8px;font-size:11px;padding:3px 8px;border-radius:99px;background:rgba(242,181,68,.16);color:var(--bar)}
 .zoom{position:absolute;bottom:8px;right:8px;display:flex;gap:6px}
 .zoom button{padding:4px 11px;background:rgba(29,31,54,.85)}
@@ -103,7 +104,7 @@ textarea{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border
 
 <div class="app">
   <header>
-    <h1>音程バー練習機<small class="ver">v13</small></h1>
+    <h1>音程バー練習機<small class="ver">v14</small></h1>
     <div class="song" id="song">見本表示中</div>
     <button id="openLoad" class="primary">曲</button>
   </header>
@@ -112,6 +113,7 @@ textarea{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border
     <canvas id="roll" aria-label="音程バー"></canvas>
     <div class="badge" id="badge">見本（音は出ません）</div>
     <div class="judge" id="judge" hidden></div>
+    <div class="octb" id="octb" hidden>1オクターブ下で歌う設定（赤い線を＋12段で表示）</div>
     <div class="zoom"><button id="zout" aria-label="縮小">−</button><button id="zin" aria-label="拡大">＋</button></div>
   </div>
 
@@ -147,7 +149,7 @@ textarea{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border
   </div>
   <div class="toggles">
     <button id="mic" class="mic">マイク OFF</button>
-    <button id="fold" class="on">オクターブ違いOK</button>
+    <button id="fold">歌う高さ：原曲</button>
     <button id="lat">遅れ補正 0.15秒</button>
     <button id="guide" disabled>お手本の声 OFF</button>
     <button id="openLyr" disabled>歌詞</button>
@@ -204,7 +206,7 @@ const S = {
   dur: 0, t: 2.0, pps: 90, playing: false,
   A: null, B: null, loop: false, demo: true,
   showContour: true, guide: false,
-  master: null, slave: null, key: null
+  master: null, elA: null, elM: null, low: false, key: null
 };
 
 /* demo melody (original, for preview only) */
@@ -226,11 +228,15 @@ self.onmessage = (e) => {
   const sorted = Float32Array.from(rms).sort();
   const p95 = sorted[Math.floor(sorted.length*0.95)] || 0;
   const gate = Math.max(0.002, p95*0.12);
-  const f0 = new Float32Array(n);
+  const raw = new Float32Array(n), cands = new Array(n);
   const d = new Float32Array(tauMax+2);
+  const toP = t => 69 + 12*Math.log2((sr/t)/440);
+  const refine = t => { if (t<=1 || t>=tauMax) return t; const a=d[t-1], b=d[t], c=d[t+1], den=a-2*b+c; return den!==0 ? t + 0.5*(a-c)/den : t; };
+  const localMin = (c, r) => { let b=-1; for (let t=Math.max(tauMin,c-r); t<=Math.min(tauMax,c+r); t++) if (b<0 || d[t]<d[b]) b=t; return b; };
   for (let i=0;i<n;i++){
-    if (i % 250 === 0) self.postMessage({progress: i/n});
-    if (rms[i] < gate){ f0[i]=NaN; continue; }
+    if (i % 250 === 0) self.postMessage({progress: i/n*0.9});
+    raw[i] = NaN;
+    if (rms[i] < gate) continue;
     const o=i*hop; let run=0, found=-1;
     d[0]=1;
     for (let tau=1; tau<=tauMax+1; tau++){
@@ -240,13 +246,57 @@ self.onmessage = (e) => {
     for (let tau=tauMin; tau<tauMax; tau++){
       if (d[tau] < 0.15){ while (tau+1<tauMax && d[tau+1]<d[tau]) tau++; found=tau; break; }
     }
-    if (found < 0){ f0[i]=NaN; continue; }
-    let t=found; const a=d[t-1], b=d[t], c=d[t+1], den=a-2*b+c;
-    if (den !== 0) t += 0.5*(a-c)/den;
-    f0[i] = 69 + 12*Math.log2((sr/t)/440);
+    if (found < 0) continue;
+    const pA = toP(refine(found));
+    raw[i] = pA;
+    const c = [{p:pA, c:d[found], alt:0}];
+    const t2 = localMin(found*2, 3);
+    if (t2 > 0 && found*2 <= tauMax && d[t2] < 0.35) c.push({p: toP(refine(t2)), c: d[t2], alt:1});
+    const th = localMin(Math.round(found/2), 2);
+    if (th > 0 && Math.round(found/2) >= tauMin && d[th] < 0.35) c.push({p: toP(refine(th)), c: d[th], alt:1});
+    cands[i] = c;
   }
-  self.postMessage({done:true, f0: f0, hop: hop/sr, c0: (W/2)/sr}, [f0.buffer]);
-};`;
+  // Viterbi over voiced runs (gaps up to 3 frames are bridged)
+  const out = new Float32Array(n).fill(NaN);
+  function pass(M){
+    let i = 0;
+    while (i < n){
+      if (!cands[i]){ i++; continue; }
+      const idx = []; let j = i, gap = 0;
+      while (j < n && gap <= 3){ if (cands[j]){ idx.push(j); gap = 0; } else gap++; j++; }
+      const T = idx.length;
+      const cost = [], back = [];
+      for (let k=0;k<T;k++){
+        const cs = cands[idx[k]], cc = new Array(cs.length), bb = new Array(cs.length);
+        for (let a=0;a<cs.length;a++){
+          let em = cs[a].c * 4 + cs[a].alt * 0.1;
+          if (M !== null){ const dist = Math.abs(cs[a].p - M); if (dist > 10) em += 0.02*(dist - 10); }
+          if (k === 0){ cc[a] = em; bb[a] = -1; continue; }
+          const pc = cands[idx[k-1]], pcost = cost[k-1];
+          let best = Infinity, bi = 0;
+          for (let b=0;b<pc.length;b++){
+            const dp = Math.abs(cs[a].p - pc[b].p);
+            const tr = dp > 7 ? 0.6 : dp * 0.03;
+            const v = pcost[b] + tr; if (v < best){ best = v; bi = b; }
+          }
+          cc[a] = best + em; bb[a] = bi;
+        }
+        cost.push(cc); back.push(bb);
+      }
+      let a = 0; const last = cost[T-1]; for (let q=1;q<last.length;q++) if (last[q] < last[a]) a = q;
+      for (let k=T-1;k>=0;k--){ out[idx[k]] = cands[idx[k]][a].p; a = back[k][a]; }
+      i = j;
+    }
+  }
+  pass(null);
+  const vs = []; for (let i=0;i<n;i++) if (!isNaN(out[i])) vs.push(out[i]);
+  vs.sort((a,b)=>a-b);
+  const M = vs.length ? vs[vs.length>>1] : null;
+  pass(M);
+  self.postMessage({progress: 1});
+  self.postMessage({done:true, f0: out, raw, hop: hop/sr, c0: (W/2)/sr}, [out.buffer, raw.buffer]);
+};
+`;
 
 function analyze(x, sr, onProg){
   return new Promise((res, rej) => {
@@ -343,14 +393,15 @@ async function mixStems(files, onProg, sr){
 const SHIFT_SRC = `
 self.onmessage = (e) => {
   try {
-    const X = e.data.X, ratio = e.data.ratio, len = X.length;
-    const N = 1024, Hs = 512, tol = 160, Lc = 384;
+    const L = e.data.L, R = e.data.R, ratio = e.data.ratio, len = L.length;
+    const N = Math.round(1024 * e.data.sr / 22050), Hs = N >> 1, tol = Math.round(160 * e.data.sr / 22050), Lc = Math.round(384 * e.data.sr / 22050);
     const win = new Float32Array(N); for (let j=0;j<N;j++) win[j] = 0.5 - 0.5*Math.cos(2*Math.PI*j/N);
     const sLen = Math.ceil(len * ratio) + N;
-    const S = new Float32Array(sLen);
+    const SL = new Float32Array(sLen), SR = new Float32Array(sLen);
     const frames = Math.floor((sLen - N) / Hs);
     let prev = 0;
-    const corr = (a, b) => { let s = 0; for (let j=0;j<Lc;j+=2) s += X[a+j]*X[b+j]; return s; };
+    const st = Math.max(2, Math.round(e.data.sr / 11025));
+    const corr = (a, b) => { let s = 0; for (let j=0;j<Lc;j+=st) s += (L[a+j]+R[a+j])*(L[b+j]+R[b+j]); return s; };
     for (let k=0;k<frames;k++){
       const nominal = Math.round(k*Hs/ratio);
       if (nominal + N >= len) break;
@@ -360,33 +411,34 @@ self.onmessage = (e) => {
         if (nat + Lc < len){
           let bs = -Infinity;
           const lo = Math.max(0, nominal - tol), hi = Math.min(len - N - 1, nominal + tol);
-          for (let c=lo; c<=hi; c+=4){ const v = corr(nat, c); if (v > bs){ bs = v; best = c; } }
+          const cs = Math.max(2, st*2);
+          for (let c=lo; c<=hi; c+=cs){ const v = corr(nat, c); if (v > bs){ bs = v; best = c; } }
           const c0 = best;
-          for (let c=Math.max(lo,c0-3); c<=Math.min(hi,c0+3); c++){ const v = corr(nat, c); if (v > bs){ bs = v; best = c; } }
+          for (let c=Math.max(lo,c0-cs); c<=Math.min(hi,c0+cs); c++){ const v = corr(nat, c); if (v > bs){ bs = v; best = c; } }
         }
       }
       const o = k*Hs;
-      for (let j=0;j<N;j++) S[o+j] += win[j]*X[best+j];
+      for (let j=0;j<N;j++){ const w = win[j]; SL[o+j] += w*L[best+j]; SR[o+j] += w*R[best+j]; }
       prev = best;
       if (k % 400 === 0) self.postMessage({progress: k/frames});
     }
     for (let i=0;i<len;i++){
       const x = i*ratio, i0 = x|0, f = x - i0;
-      X[i] = i0 + 1 < sLen ? S[i0]*(1-f) + S[i0+1]*f : 0;
+      if (i0 + 1 < sLen){ L[i] = SL[i0]*(1-f) + SL[i0+1]*f; R[i] = SR[i0]*(1-f) + SR[i0+1]*f; } else { L[i] = 0; R[i] = 0; }
     }
-    self.postMessage({done:true, X}, [X.buffer]);
+    self.postMessage({done:true, L, R}, [L.buffer, R.buffer]);
   } catch(err){ self.postMessage({error: String(err && err.message || err)}); }
 };`;
-function shiftPitch(X, semis, onProg){
+function shiftPitch(L, R, sr, semis, onProg){
   return new Promise((res, rej) => {
     const w = new Worker(URL.createObjectURL(new Blob([SHIFT_SRC], {type:'text/javascript'})));
     w.onmessage = e => {
       if (e.data.progress !== undefined) onProg(e.data.progress);
       if (e.data.error){ w.terminate(); rej(new Error('変換: ' + e.data.error)); }
-      if (e.data.done){ w.terminate(); res(e.data.X); }
+      if (e.data.done){ w.terminate(); res({L: e.data.L, R: e.data.R}); }
     };
     w.onerror = err => { w.terminate(); rej(new Error('変換処理: ' + (err.message || 'worker error'))); };
-    w.postMessage({X, ratio: Math.pow(2, semis/12)}, [X.buffer]);
+    w.postMessage({L, R, sr, ratio: Math.pow(2, semis/12)}, [L.buffer, R.buffer]);
   });
 }
 function wavMono(X, sr){
@@ -410,50 +462,55 @@ async function loadMem(rec){
   } catch(e){ throw new Error('保存した曲データを読めませんでした。「曲」からこの曲を削除して、もう一度ファイルから追加してください（' + (e && (e.message || e.name) || e) + '）'); }
   return rec._mem;
 }
-async function buildAudio(rec0, semis, onProg){
-  let accUrl = null, vocUrl = null;
+async function buildAudio(rec0, semis, onProg, sr){
   const mem = await loadMem(rec0);
-  const rec = {
-    accs: mem.accs.map(ab => ({arrayBuffer: () => Promise.resolve(ab.slice(0))})),
-    vocal: {arrayBuffer: () => Promise.resolve(mem.vocal.slice(0))}
-  };
-  if (!semis){
-    try {
-      if (rec.accs && rec.accs.length){
-        const m = await mixStems(rec.accs, (p, t) => onProg(0.6 + p*0.4, t), 32000);
-        accUrl = URL.createObjectURL(wavBlob(m.L, m.R, m.sr));
-      }
-    } catch(e){ throw new Error('原曲キーの伴奏を読み込み中で失敗：' + (e && (e.message || e.name) || e)); }
-    return {accUrl, vocUrl: URL.createObjectURL(new Blob([mem.vocal], {type: mem.vtype}))};
-  }
-  const sr = 22050, tag = 'キー ' + (semis > 0 ? '+' : '') + semis + ' に変えています';
-  let step = '伴奏を読み込み中';
+  const tag = semis ? 'キー ' + (semis > 0 ? '+' : '') + semis + ' に変えています' : '';
+  let step = '伴奏の読み込み';
   try {
-    if (rec.accs && rec.accs.length){
-      let m = await mixStems(rec.accs, (p, t) => onProg(0.6 + p*0.1, t), sr);
-      const X = m.L; for (let i=0;i<X.length;i++) X[i] = (X[i] + m.R[i]) * 0.5; m = null;
-      step = '伴奏の変換';
-      const Y = await shiftPitch(X, semis, p => onProg(0.7 + p*0.15, `${tag}（伴奏） ${Math.round(p*100)}%`));
-      accUrl = URL.createObjectURL(wavMono(Y, sr));
+    let acc = null;
+    if (mem.accs.length){
+      acc = await mixStems(mem.accs.map(ab => ({arrayBuffer: () => Promise.resolve(ab.slice(0))})), (p, t) => onProg(0.5 + p*(semis ? 0.1 : 0.3), t), sr);
+      if (semis){
+        step = '伴奏の変換';
+        acc = await shiftPitch(acc.L, acc.R, sr, semis, p => onProg(0.6 + p*0.15, `${tag}（伴奏） ${Math.round(p*100)}%`));
+      }
     }
+    if (!acc && !semis) return {accUrl: null, mixUrl: URL.createObjectURL(new Blob([mem.vocal], {type: mem.vtype}))};
     step = 'お手本の読み込み';
-    const ab = await decode(await rec.vocal.arrayBuffer(), sr);
-    const l = ab.getChannelData(0), r = ab.numberOfChannels > 1 ? ab.getChannelData(1) : l;
-    const X = new Float32Array(l.length); for (let i=0;i<X.length;i++) X[i] = (l[i] + r[i]) * 0.5;
-    step = 'お手本の変換';
-    const Y = await shiftPitch(X, semis, p => onProg(0.85 + p*0.15, `${tag}（お手本） ${Math.round(p*100)}%`));
-    vocUrl = URL.createObjectURL(wavMono(Y, sr));
+    const vb = await decode(mem.vocal.slice(0), sr);
+    let vL = new Float32Array(vb.getChannelData(0)), vR = vb.numberOfChannels > 1 ? new Float32Array(vb.getChannelData(1)) : new Float32Array(vL);
+    if (semis){
+      step = 'お手本の変換';
+      const s = await shiftPitch(vL, vR, sr, semis, p => onProg(0.75 + p*0.15, `${tag}（お手本） ${Math.round(p*100)}%`));
+      vL = s.L; vR = s.R;
+    }
+    step = '音の仕上げ';
+    onProg(0.92, '音を仕上げています');
+    if (!acc) return {accUrl: null, mixUrl: URL.createObjectURL(wavBlob(vL, vR, sr))};
+    const accUrl = URL.createObjectURL(wavBlob(acc.L, acc.R, sr));
+    const L = acc.L, R = acc.R, n = Math.min(L.length, vL.length);
+    let peak = 0;
+    for (let i=0;i<n;i++){ L[i] += vL[i]; R[i] += vR[i]; const a = Math.abs(L[i]), c = Math.abs(R[i]); if (a > peak) peak = a; if (c > peak) peak = c; }
+    if (peak > 0.98){ const g = 0.98/peak; for (let i=0;i<L.length;i++){ L[i] *= g; R[i] *= g; } }
+    return {accUrl, mixUrl: URL.createObjectURL(wavBlob(L, R, sr))};
   } catch(e){
     throw new Error(step + 'で失敗：' + (e && (e.message || e.name) || e));
   }
-  return {accUrl, vocUrl};
+}
+let lowQ = false;
+async function buildAudioSafe(rec, semis, onProg){
+  if (!lowQ){
+    try { return await buildAudio(rec, semis, onProg, 44100); }
+    catch(e){ console.warn('HQ failed, retry', e); lowQ = true; }
+  }
+  return await buildAudio(rec, semis, onProg, 32000);
 }
 function applyKeyToBars(){
   const res = CUR && CUR.res; if (!res) return;
   const k = S.semi || 0;
   S.notes = res.notes.map(n => ({s:n.s, e:n.e, p:n.p + k}));
   S.contour = k ? res.contour.map(v => v === null ? null : v + k) : res.contour;
-  S.hop = res.hop; S.c0 = res.c0; S.songMed = null; Mic.shift = null; Mic.diffs = []; Mic.pts = [];
+  S.hop = res.hop; S.c0 = res.c0; Mic.pts = [];
   fitRange();
 }
 
@@ -519,6 +576,7 @@ const DB = {
 };
 try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch(e){}
 let CUR = null;
+const RES_VER = 2;
 const titleOf = name => name.normalize('NFC').replace(/_[^_]*_mixed\.\w+$/,'').replace(/\.\w+$/,'');
 const toBlob = async f => new Blob([await f.arrayBuffer()], {type: f.type || 'audio/mp4'});
 let saveChain = Promise.resolve();
@@ -528,7 +586,7 @@ function saveCur(){
   saveChain = saveChain.then(async () => {
     try {
       const f = await DB.get(c.id);
-      if (f){ f.ab = c.ab; f.lyrics = c.lyrics; f.semi = c.semi; f.lastUsed = c.lastUsed; f.res = c.res; f.title = c.title; await DB.put(f); }
+      if (f){ f.ab = c.ab; f.lyrics = c.lyrics; f.semi = c.semi; f.low = c.low; f.lastUsed = c.lastUsed; f.res = c.res; f.resVer = c.resVer; f.title = c.title; await DB.put(f); }
       else { const keep = Object.assign({}, c); delete keep._mem; await DB.put(keep); }
     } catch(e){ console.warn(e); }
   });
@@ -550,16 +608,19 @@ async function analyzeVocal(blob, onProg){
 
 async function openSong(rec, onProg){
   onProg = onProg || (()=>{});
-  if (!rec.res){
-    onProg(0, 'ボーカルを解析しています');
-    rec.res = await analyzeVocal(rec.vocal, p => onProg(p*0.6, `音程を解析しています ${Math.round(p*100)}%`));
+  if (!rec.res || rec.resVer !== RES_VER){
+    onProg(0, 'お手本の音程を解析しています');
+    const mem = await loadMem(rec);
+    rec.res = await analyzeVocal(new Blob([mem.vocal], {type: mem.vtype}), p => onProg(p*0.5, `お手本の音程を解析しています ${Math.round(p*100)}%`));
+    rec.resVer = RES_VER;
   }
   S.semi = rec.semi || 0; pendingKey = S.semi;
+  S.low = !!rec.low;
   let au;
-  try { au = await buildAudio(rec, S.semi, onProg); }
-  catch(e){ console.error(e); S.semi = 0; pendingKey = 0; au = await buildAudio(rec, 0, onProg); setTimeout(() => { $('keyMsg').textContent = 'キーを変えられず原曲キーで開きました（' + (e && e.message || e) + '）'; }, 0); }
+  try { au = await buildAudioSafe(rec, S.semi, onProg); }
+  catch(e){ console.error(e); S.semi = 0; pendingKey = 0; au = await buildAudioSafe(rec, 0, onProg); setTimeout(() => { $('keyMsg').textContent = 'キーを変えられず原曲キーで開きました（' + (e && e.message || e) + '）'; }, 0); }
   onProg(1, '仕上げ中');
-  await setupPlayers(au.vocUrl, au.accUrl);
+  await setupPlayers(au.accUrl, au.mixUrl);
   CUR = rec; applyKeyToBars();
   S.demo = false; S.key = rec.id; S.t = 0; Mic.pts = [];
   const ab = rec.ab || {};
@@ -614,9 +675,12 @@ $('go').onclick = async () => {
       id, title: titleOf(vocalF.name),
       vocal: await toBlob(vocalF),
       accs: await Promise.all(accF.map(toBlob)),
-      res: old ? old.res : (store.get('pitch:' + vocalF.name + ':' + vocalF.size) || null),
+      res: old && old.resVer === RES_VER ? old.res : null,
+      resVer: old && old.resVer === RES_VER ? RES_VER : 0,
       lyrics: old ? old.lyrics : null,
       ab: old ? old.ab : null,
+      semi: old ? (old.semi || 0) : 0,
+      low: old ? !!old.low : false,
       added: Date.now()
     };
     await openSong(rec, setProg);
@@ -718,22 +782,18 @@ function mkAudio(url){
     a.onloadedmetadata = () => res(a); a.onerror = rej; a.src = url; a.load();
   });
 }
-async function setupPlayers(vUrl, aUrl){
+async function setupPlayers(accUrl, mixUrl){
   pause();
-  [S.master, S.slave].forEach(el => { if (el){ el.pause(); el.removeAttribute('src'); } });
-  const v = await mkAudio(vUrl);
-  if (aUrl){
-    const a = await mkAudio(aUrl);
-    S.master = a; S.slave = v; S.guide = false;
-  } else {
-    S.master = v; S.slave = null; S.guide = true;
-  }
-  v.muted = !S.guide;
-  S.master.onended = () => { pause(); };
+  [S.elA, S.elM].forEach(el => { if (el){ el.pause(); el.removeAttribute('src'); try { el.load(); } catch(e){} } });
+  S.elM = await mkAudio(mixUrl);
+  S.elA = accUrl ? await mkAudio(accUrl) : null;
+  if (!S.elA) S.guide = true;
+  S.master = (S.guide || !S.elA) ? S.elM : S.elA;
+  [S.elA, S.elM].forEach(el => { if (el) el.onended = () => { if (el === S.master) pause(); }; });
   S.dur = S.master.duration || S.dur;
   applySpeed();
 }
-function each(fn){ [S.master, S.slave].forEach(el => el && fn(el)); }
+function each(fn){ [S.elA, S.elM].forEach(el => el && fn(el)); }
 function seek(t){
   t = Math.max(0, Math.min(S.dur || 0, t));
   if (S.loop && S.A!==null && S.B!==null && Math.abs(t - S.A) < 0.05) Mic.pts = Mic.pts.filter(p => p.t < S.A || p.t > S.B);
@@ -743,18 +803,30 @@ function seek(t){
 async function play(){
   if (!S.master) return;
   if (S.loop && S.A!==null && S.B!==null && (S.t < S.A || S.t >= S.B)) seek(S.A);
-  each(el => { el.currentTime = S.t; });
+  try { S.master.currentTime = S.t; } catch(e){}
   micRevive();
   try { await S.master.play(); } catch(e){}
-  if (S.slave){ try { S.slave.currentTime = S.master.currentTime; await S.slave.play(); } catch(e){} }
   S.playing = !S.master.paused;
   refreshUI();
 }
 function pause(){ each(el => el.pause()); S.playing = false; refreshUI(); }
+function setGuide(on){
+  if (!S.elA){ S.guide = true; refreshUI(); return; }
+  S.guide = on;
+  const next = on ? S.elM : S.elA;
+  if (next !== S.master){
+    const t = S.master.currentTime, was = S.playing;
+    S.master.pause();
+    try { next.currentTime = t; } catch(e){}
+    S.master = next;
+    if (was){ const pr = next.play(); if (pr && pr.catch) pr.catch(() => {}); }
+  }
+  refreshUI();
+}
 function applySpeed(){ const r = $('speed').value/100; each(el => { el.playbackRate = r; el.defaultPlaybackRate = r; }); $('speedv').textContent = $('speed').value + '%'; }
 
 /* ---------- microphone ---------- */
-const Mic = {on:false, ctx:null, an:null, buf:null, stream:null, pts:[], hist:[], cur:null, fold:true, diffs:[], shift:null, shiftVote:0, tol:0.6, lat:(store.get('lat') ?? 0.15)};
+const Mic = {on:false, ctx:null, an:null, buf:null, stream:null, pts:[], hist:[], cur:null, tol:0.6, lat:(store.get('lat') ?? 0.15)};
 const LATS = [0, 0.1, 0.15, 0.2, 0.3, 0.4];
 function micPitch(){
   const an = Mic.an; an.getFloatTimeDomainData(Mic.buf);
@@ -832,18 +904,7 @@ function micTick(){
     }
     if (Mic.stable != null){
       let m = Mic.stable;
-      if (Mic.fold){
-        const tg = noteAt(tNow);
-        if (tg){
-          if (Mic.shift == null) Mic.shift = 12*Math.round((tg.p - Mic.stable)/12);
-          const d = tg.p - (Mic.stable + Mic.shift);
-          const alt = Mic.shift + 12*Math.round(d/12);
-          if (alt !== Mic.shift && Math.abs(tg.p - (Mic.stable + alt)) <= 4){
-            if (++Mic.shiftVote >= 15){ Mic.shift = alt; Mic.shiftVote = 0; }
-          } else Mic.shiftVote = 0;
-        }
-        m += Mic.shift || 0;
-      }
+      if (S.low) m += 12;
       Mic.cur = m;
       if (S.playing && !S.demo){
         const last = Mic.pts[Mic.pts.length-1];
@@ -857,7 +918,6 @@ function micTick(){
   const name = NAMES[((Math.round(Mic.cur)%12)+12)%12];
   if (!tgt){ J.className='judge'; J.textContent = name; return; }
   let diff = Mic.cur - tgt.p;
-  if (Mic.fold) diff = ((diff + 6) % 12 + 12) % 12 - 6;
   if (Math.abs(diff) <= Mic.tol){ J.className='judge ok'; J.textContent = name + '　ぴったり'; }
   else { J.className='judge off'; J.textContent = name + '　' + Math.abs(diff).toFixed(1) + (diff > 0 ? ' 高い' : ' 低い'); }
 }
@@ -876,8 +936,8 @@ $('keyGo').onclick = async () => {
   if (!CUR || keyBusy) return;
   keyBusy = true; const was = S.playing; pause(); const t = S.t; showKey();
   try {
-    const au = await buildAudio(CUR, pendingKey, (p, txt) => { $('keyMsg').textContent = txt || ('準備中 ' + Math.round(p*100) + '%'); });
-    await setupPlayers(au.vocUrl, au.accUrl);
+    const au = await buildAudioSafe(CUR, pendingKey, (p, txt) => { $('keyMsg').textContent = txt || ('準備中 ' + Math.round(p*100) + '%'); });
+    await setupPlayers(au.accUrl, au.mixUrl);
     S.semi = pendingKey; CUR.semi = pendingKey; applyKeyToBars(); seek(t); saveCur();
     keyBusy = false; showKey(); flash('キーを ' + fmtKey(S.semi) + ' にしました');
     if (was) play();
@@ -887,7 +947,7 @@ $('keyGo').onclick = async () => {
 /* ---------- controls ---------- */
 function enable(on){
   ['back','play','fwd','setA','setB','loop','speed','guide','clearAB','openLyr','keyDown','keyUp'].forEach(id => $(id).disabled = !on);
-  $('guide').disabled = !on || !S.slave;
+  $('guide').disabled = !on || !S.elA;
 }
 $('play').onclick = () => S.playing ? pause() : play();
 $('back').onclick = () => seek(S.t - 5);
@@ -906,10 +966,10 @@ $('loop').onclick = () => {
   S.loop = !S.loop; saveAB(); refreshUI();
 };
 $('clearAB').onclick = () => { S.A = S.B = null; S.loop = false; saveAB(); refreshUI(); };
-$('guide').onclick = () => { S.guide = !S.guide; if (S.slave) S.slave.muted = !S.guide; refreshUI(); };
+$('guide').onclick = () => setGuide(!S.guide);
 $('contour').onclick = () => { S.showContour = !S.showContour; refreshUI(); };
 $('mic').onclick = micToggle;
-$('fold').onclick = () => { Mic.fold = !Mic.fold; Mic.shift = null; Mic.diffs = []; refreshUI(); };
+$('fold').onclick = () => { S.low = !S.low; Mic.pts = []; Mic.hist = []; Mic.stable = null; if (CUR){ CUR.low = S.low; saveCur(); } refreshUI(); };
 $('lat').onclick = () => { const i = LATS.indexOf(Mic.lat); Mic.lat = LATS[(i+1) % LATS.length]; store.set('lat', Mic.lat); Mic.pts = []; refreshUI(); };
 $('zin').onclick = () => { S.pps = Math.min(260, S.pps*1.25); };
 $('zout').onclick = () => { S.pps = Math.max(35, S.pps/1.25); };
@@ -936,7 +996,8 @@ function refreshUI(){
   $('mic').classList.toggle('on', Mic.on); $('mic').textContent = 'マイク ' + (Mic.on ? 'ON' : 'OFF');
   showKey();
   $('lat').textContent = '遅れ補正 ' + Mic.lat.toFixed(2).replace(/0$/,'') + '秒';
-  $('fold').classList.toggle('on', Mic.fold); $('fold').textContent = Mic.fold ? 'オクターブ違いOK' : 'オクターブも判定';
+  $('fold').classList.toggle('on', !!S.low); $('fold').textContent = S.low ? '歌う高さ：1オクターブ下' : '歌う高さ：原曲';
+  $('octb').hidden = !S.low || S.demo;
 }
 
 /* ---------- drawing ---------- */
@@ -996,7 +1057,7 @@ function drawRoll(){
     const y = yOf(n.p) + rh*0.14, hh = rh*0.72;
     const isNow = n.s <= S.t && n.e >= S.t;
     if (isNow) current = n;
-    const tl = S.t - Mic.lat; const hit = Mic.on && Mic.cur !== null && n.s <= tl && n.e >= tl && Math.abs(Mic.fold ? (((Mic.cur - n.p) + 6) % 12 + 12) % 12 - 6 : Mic.cur - n.p) <= Mic.tol;
+    const tl = S.t - Mic.lat; const hit = Mic.on && Mic.cur !== null && n.s <= tl && n.e >= tl && Math.abs(Mic.cur - n.p) <= Mic.tol;
     ctx.fillStyle = hit ? C['--hit'] : n.e < S.t ? C['--bar-past'] : C['--bar'];
     if (isNow){ ctx.shadowColor = hit ? C['--hit'] : C['--bar']; ctx.shadowBlur = 14*dpr; }
     rr(ctx, x, y, Math.max(2*dpr, x2-x), hh, 4*dpr); ctx.fill();
@@ -1089,12 +1150,10 @@ function tick(){
   if (S.master){
     const actual = !S.master.paused && !S.master.ended;
     if (actual !== S.playing){ S.playing = actual; refreshUI(); }
-    if (S.playing && S.slave && S.slave.paused){ try { S.slave.play(); } catch(e){} }
   }
   if (S.playing && S.master){
     S.t = S.master.currentTime;
     if (S.loop && S.A!==null && S.B!==null && S.t >= S.B){ seek(S.A); }
-    else if (S.slave && Math.abs(S.slave.currentTime - S.t) > 0.1){ try { S.slave.currentTime = S.t; } catch(e){} }
   }
   $('tnow').textContent = fmt(S.t, true);
   micTick();
@@ -1103,6 +1162,7 @@ function tick(){
   requestAnimationFrame(tick);
 }
 refreshUI();
+window.__dbg = {S, Mic};
 requestAnimationFrame(tick);
 bootLast();
 })();
