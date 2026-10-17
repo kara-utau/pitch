@@ -84,8 +84,11 @@ select{font:inherit;font-size:13px;color:var(--fg);background:var(--panel);borde
 .prog{height:6px;background:var(--bg);border-radius:9px;overflow:hidden}
 .prog i{display:block;height:100%;width:0;background:var(--bar);transition:width .15s}
 #msg{min-height:1.2em;color:var(--fg)}
-.pick{position:relative;overflow:hidden;display:inline-block}
-.pick input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.sheet .card>*{flex-shrink:0}
+.lib{max-height:38vh;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+.mutetxt{font-size:12px;color:var(--mute)}
+.pickrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.fileIn{position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0}
 .lyr{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 12px;min-height:58px;display:flex;flex-direction:column;justify-content:center;gap:2px;box-sizing:border-box;user-select:none;-webkit-user-select:none}
 .lyr .cur{font-size:19px;font-weight:700;line-height:1.35;overflow-wrap:anywhere}
 .lyr .nxt{font-size:13px;color:var(--mute);overflow-wrap:anywhere}
@@ -104,7 +107,7 @@ textarea{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border
 
 <div class="app">
   <header>
-    <h1>音程バー練習機<small class="ver">v14</small></h1>
+    <h1>音程バー練習機<small class="ver">v15</small></h1>
     <div class="song" id="song">見本表示中</div>
     <button id="openLoad" class="primary">曲</button>
   </header>
@@ -165,7 +168,7 @@ textarea{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border
     <div class="lib" id="lib"><p>まだ保存した曲はありません。下の「ファイルを選ぶ」から追加すると、次からはここをタップするだけで開けます。</p></div>
     <h3>新しい曲を追加</h3>
     <p>Moisesで書き出したファイルを<b>まとめて全部</b>選んでください。名前に「ボーカル」が入ったものを音程バーにし、残りは伴奏として重ねて鳴らします。ファイルはこのスマホの中にだけ保存されます。</p>
-    <span class="pick"><button class="primary" type="button">ファイルを選ぶ</button><input type="file" id="fileIn" multiple accept="audio/*,.m4a,.mp3,.wav,.aac"></span>
+    <div class="pickrow"><button class="primary" type="button" id="pickBtn">ファイルを選ぶ</button><span id="libCount" class="mutetxt"></span></div>
     <div class="files" id="files"></div>
     <div class="prog"><i id="progBar"></i></div>
     <div id="msg"></div>
@@ -523,10 +526,27 @@ const partName = name => {
   return m ? m[1] : name;
 };
 
+function clearPicked(){
+  picked = []; $('files').textContent = ''; $('progBar').style.width = '0%';
+  $('msg').textContent = ''; $('go').disabled = true;
+}
+// iPhoneで2曲目以降のファイル選択が反応しないことがあるため、毎回新しい選択欄を作る
+$('pickBtn').onclick = () => {
+  const old = document.getElementById('fileIn'); if (old) old.remove();
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.id = 'fileIn'; inp.className = 'fileIn'; inp.multiple = true;
+  inp.accept = 'audio/*,.m4a,.mp3,.wav,.aac';
+  let done = false;
+  const h = () => { if (done || !inp.files || !inp.files.length) return; done = true; onPicked(inp.files); };
+  inp.addEventListener('change', h); inp.addEventListener('input', h);
+  document.body.appendChild(inp);
+  inp.click();
+};
 $('openLoad').onclick = () => { $('sheet').hidden = false; };
 $('closeLoad').onclick = () => { $('sheet').hidden = true; };
-$('fileIn').onchange = e => {
-  picked = Array.from(e.target.files).map(f => ({f, role: roleOf(f.name)}));
+function onPicked(files){
+  picked = Array.from(files).map(f => ({f, role: roleOf(f.name)}));
+  $('progBar').style.width = '0%';
   const box = $('files'); box.textContent = '';
   picked.forEach((it, i) => {
     const row = document.createElement('div'); row.className='file';
@@ -540,7 +560,7 @@ $('fileIn').onchange = e => {
     row.append(sp, sel); box.appendChild(row);
   });
   checkGo();
-};
+}
 function checkGo(){
   const v = picked.filter(p=>p.role==='vocal').length;
   $('go').disabled = v !== 1;
@@ -639,6 +659,7 @@ async function renderLib(){
   try { list = await DB.all(); } catch(e){ return; }
   if (!list.length) return;
   list.sort((a,b) => (b.lastUsed||0) - (a.lastUsed||0));
+  $('libCount').textContent = `保存中 ${list.length} 曲`;
   box.textContent = '';
   list.forEach(rec => {
     const row = document.createElement('div'); row.className = 'libitem';
@@ -657,7 +678,8 @@ async function renderLib(){
       try { await DB.del(rec.id); } catch(e){}
       if (CUR && CUR.id === rec.id) CUR = null;
       row.remove();
-      if (!box.children.length) box.innerHTML = '<p>まだ保存した曲はありません。</p>';
+      if (!box.children.length){ box.innerHTML = '<p>まだ保存した曲はありません。</p>'; $('libCount').textContent = ''; }
+      else $('libCount').textContent = `保存中 ${box.children.length} 曲`;
     };
     row.append(op, del); box.appendChild(row);
   });
@@ -687,7 +709,8 @@ $('go').onclick = async () => {
     let saved = true; try { const keep = Object.assign({}, rec); delete keep._mem; await DB.put(keep); } catch(e){ saved = false; }
     $('msg').textContent = saved ? `保存しました：次からは上の一覧から開けます（音のかたまり ${S.notes.length} 個）` : '開きましたが、スマホの空き容量が足りず保存できませんでした。';
     renderLib();
-    setTimeout(()=>{ $('sheet').hidden = true; }, saved ? 900 : 2500);
+    picked = []; $('files').textContent = '';
+    setTimeout(()=>{ $('sheet').hidden = true; $('msg').textContent = ''; $('progBar').style.width = '0%'; }, saved ? 900 : 2500);
   } catch(err){
     console.error(err);
     $('msg').textContent = 'ファイルを読み込めませんでした。m4a・mp3・wavのいずれかか確認して、もう一度選び直してください。';
