@@ -86,6 +86,14 @@ select{font:inherit;font-size:13px;color:var(--fg);background:var(--panel);borde
 #msg{min-height:1.2em;color:var(--fg)}
 .sheet .card>*{flex-shrink:0}
 .lib{max-height:38vh;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+.lrows{display:flex;flex-direction:column;gap:4px;max-height:42vh;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;border:1px solid var(--line);border-radius:10px;padding:6px;box-sizing:border-box}
+.lrow{display:grid;grid-template-columns:auto 1fr auto auto auto;gap:6px;align-items:center;padding:4px 2px;border-radius:8px}
+.lrow.now{background:#2a2618}
+.lrow .tt{font-family:var(--font-dot);font-size:13px;padding:5px 7px;min-width:58px;font-variant-numeric:tabular-nums}
+.lrow .tx{font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lrow .nb{font-size:12px;padding:5px 8px}
+.lrow .here{font-size:12px;padding:5px 8px;color:#2a2618;background:var(--bar);border-color:var(--bar)}
+.lrow.warn .tt{color:var(--me);border-color:var(--me)}
 .mutetxt{font-size:12px;color:var(--mute)}
 .pickrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .fileIn{position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0}
@@ -107,7 +115,7 @@ textarea{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border
 
 <div class="app">
   <header>
-    <h1>音程バー練習機<small class="ver">v15</small></h1>
+    <h1>音程バー練習機<small class="ver">v16</small></h1>
     <div class="song" id="song">見本表示中</div>
     <button id="openLoad" class="primary">曲</button>
   </header>
@@ -190,8 +198,12 @@ textarea{font:inherit;font-size:15px;color:var(--fg);background:var(--bg);border
       <button id="lyrTime">タイミングを合わせる</button>
       <button id="lyrClose">閉じる</button>
     </div>
-    <p>ズレていたら「タイミングを合わせる」を押してください。今の再生位置から曲が流れるので、各行の歌い始めで歌詞の欄をタップします。曲の途中から合わせたいときは、先にその少し前へ移動してから押してください。</p>
     <div id="lyrMsg"></div>
+    <h3>1行ずつ直す</h3>
+    <p>左の時間をタップ → その行の少し前から再生。歌い始めで<b>「今」</b>を押すと、その行だけ合います。<b>−／＋</b>は0.2秒ずつ前後に動かします。他の行はそのままです。</p>
+    <div class="row"><button id="lyrPlay">▶ 再生</button></div>
+    <div class="lrows" id="lrows"></div>
+    <p>まとめて合わせたいときは「タイミングを合わせる」。今の再生位置から曲が流れるので、各行の歌い始めで歌詞の欄をタップします。<b>途中でやめるときは「歌詞」ボタン</b>を押せば、そこまでが保存されます。</p>
   </div>
 </div>
 
@@ -736,16 +748,31 @@ function setLyrics(ly){
   $('lyr').hidden = !LY.lines.length; $('lyr').classList.remove('timing');
   $('lyrText').value = LY.lines.join('\n');
 }
+// 時間が空いている行・順番が逆になった行も消えないように、表示用の時間を整える
+function effTimes(){
+  const T = LY.times.slice(0, LY.lines.length), n = LY.lines.length;
+  while (T.length < n) T.push(null);
+  for (let i=0;i<n;i++){
+    if (T[i] != null && (i === 0 || T[i] > (T[i-1] ?? -1))) continue;
+    if (T[i] != null && i > 0 && T[i] <= T[i-1]) T[i] = null;
+    if (T[i] == null){
+      let j = i+1; while (j < n && (LY.times[j] == null || (i > 0 && LY.times[j] <= T[i-1]))) j++;
+      const a = i ? T[i-1] : 0, b = j < n ? LY.times[j] : a + 3*(j-i+1);
+      T[i] = round1(a + (b - a) / (j - i + 1));
+    }
+  }
+  return T;
+}
 function lineAt(t){
-  let idx = -1;
-  for (let i=0;i<LY.times.length;i++){ if (LY.times[i] != null && LY.times[i] <= t + 0.3) idx = i; else if (LY.times[i] > t + 0.3) break; }
+  const T = effTimes(); let idx = -1;
+  for (let i=0;i<T.length;i++){ if (T[i] <= t + 0.3) idx = i; else break; }
   return idx;
 }
 function drawLyrics(){
   if (!LY.lines.length) return;
   if (LY.timing){
     $('lyrCur').textContent = LY.k < LY.lines.length ? 'タップ ▶ ' + LY.lines[LY.k] : '最後まで合わせました。タップで終了';
-    $('lyrNxt').textContent = LY.lines[LY.k+1] || '';
+    $('lyrNxt').textContent = (LY.lines[LY.k+1] || '') + '　（やめるときは「歌詞」ボタン）';
     return;
   }
   const i = lineAt(S.t);
@@ -759,17 +786,72 @@ async function saveLyrics(){
   CUR.lyrics = LY.lines.length ? {lines: LY.lines.slice(), times: LY.times.slice()} : null;
   await saveCur(); renderLib();
 }
-$('openLyr').onclick = () => { $('lyrText').value = LY.lines.join('\n'); $('lyrMsg').textContent = ''; $('lsheet').hidden = false; };
+// 歌詞を書き直したとき：同じ行は時間を引き継ぎ、書き換えた行は元の行の時間、新しく増えた行だけ仮の時間
+function mergeTimes(oldL, oldT, newL){
+  const n = oldL.length, m = newL.length, key = x => x.replace(/\s+/g,'');
+  const L = Array.from({length:n+1}, () => new Int32Array(m+1));
+  for (let i=n-1;i>=0;i--) for (let j=m-1;j>=0;j--) L[i][j] = key(oldL[i]) === key(newL[j]) ? L[i+1][j+1]+1 : Math.max(L[i+1][j], L[i][j+1]);
+  const pairs = []; let i=0, j=0;
+  while (i<n && j<m){ if (key(oldL[i]) === key(newL[j])){ pairs.push([i,j]); i++; j++; } else if (L[i+1][j] >= L[i][j+1]) i++; else j++; }
+  pairs.push([n,m]);
+  const out = new Array(m).fill(null); let pi = 0, pj = 0, added = 0;
+  for (const [a,b] of pairs){
+    const go = a - pi, gn = b - pj;           // 書き換え区間：古い行 go 個 → 新しい行 gn 個
+    for (let k=0;k<gn;k++){ if (k < go) out[pj+k] = oldT[pi+k]; else { out[pj+k] = null; added++; } }
+    if (b < m) out[b] = oldT[a];
+    pi = a+1; pj = b+1;
+  }
+  return {times: out, added};
+}
+function setLineTime(i, t){
+  LY.times = effTimes(); LY.times[i] = Math.max(0, round1(t));
+  LY.shown = -2; saveLyrics(); renderLRows();
+}
+function renderLRows(){
+  const box = $('lrows'); box.textContent = '';
+  if (!LY.lines.length){ box.innerHTML = '<p>歌詞を保存すると、ここに行の一覧が出ます。</p>'; return; }
+  const T = effTimes(), cur = lineAt(S.t);
+  LY.lines.forEach((line, i) => {
+    const row = document.createElement('div'); row.className = 'lrow' + (i === cur ? ' now' : '') + (LY.times[i] == null || T[i] !== LY.times[i] ? ' warn' : '');
+    const tt = document.createElement('button'); tt.className = 'tt'; tt.textContent = fmt(T[i], true);
+    tt.onclick = () => { seek(Math.max(0, T[i] - 2)); if (!S.playing) play(); };
+    const tx = document.createElement('span'); tx.className = 'tx'; tx.textContent = line;
+    const mi = document.createElement('button'); mi.className = 'nb'; mi.textContent = '−'; mi.onclick = () => setLineTime(i, T[i] - 0.2);
+    const pl = document.createElement('button'); pl.className = 'nb'; pl.textContent = '＋'; pl.onclick = () => setLineTime(i, T[i] + 0.2);
+    const hr = document.createElement('button'); hr.className = 'here'; hr.textContent = '今'; hr.onclick = () => setLineTime(i, S.t - 0.15);
+    row.append(tt, tx, mi, pl, hr); box.appendChild(row);
+  });
+}
+$('lyrPlay').onclick = () => { S.playing ? pause() : play(); };
+setInterval(() => {
+  if ($('lsheet').hidden) return;
+  $('lyrPlay').textContent = S.playing ? '❚❚ 停止' : '▶ 再生';
+  const cur = lineAt(S.t); const rows = $('lrows').children;
+  for (let i=0;i<rows.length;i++) rows[i].classList.toggle('now', i === cur);
+}, 250);
+async function endTiming(){
+  LY.timing = false; LY.shown = -2; $('lyr').classList.remove('timing'); await saveLyrics(); flash('歌詞のタイミングを保存しました');
+}
+$('openLyr').onclick = () => {
+  if (LY.timing){ endTiming(); return; }
+  $('lyrText').value = LY.lines.join('\n'); $('lyrMsg').textContent = ''; renderLRows(); $('lsheet').hidden = false;
+};
 $('lyrClose').onclick = () => { $('lsheet').hidden = true; };
 $('lyrSave').onclick = async () => {
   const lines = $('lyrText').value.normalize('NFC').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
   if (!lines.length){ LY.lines = []; LY.times = []; $('lyr').hidden = true; await saveLyrics(); $('lyrMsg').textContent = '歌詞を消しました'; return; }
-  const same = lines.length === LY.lines.length && LY.times.length === lines.length;
-  LY.lines = lines; if (!same) LY.times = autoTimes(lines);
+  let msg;
+  if (!LY.lines.length){
+    LY.times = autoTimes(lines); msg = `保存しました。${lines.length}行を自動で割り当てました。ズレていたら下の一覧で直してください`;
+  } else {
+    const r = mergeTimes(LY.lines, effTimes(), lines);
+    LY.times = r.times;
+    msg = r.added ? `保存しました。変わらない行のタイミングはそのまま。新しい行（${r.added}行）は仮の時間なので、下の一覧で「今」を押して合わせてください` : '保存しました（タイミングはそのまま）';
+  }
+  LY.lines = lines;
   LY.shown = -2; $('lyr').hidden = false;
-  await saveLyrics();
-  $('lyrMsg').textContent = same ? '保存しました（タイミングはそのまま）' : `保存しました。${lines.length}行を自動で割り当てました。ズレていたら「タイミングを合わせる」へ`;
-  setTimeout(()=>{ $('lsheet').hidden = true; }, 1200);
+  await saveLyrics(); renderLRows();
+  $('lyrMsg').textContent = msg;
 };
 $('lyrTime').onclick = async () => {
   if (!LY.lines.length){ $('lyrMsg').textContent = '先に歌詞を貼り付けて「保存」を押してください'; return; }
@@ -784,8 +866,8 @@ $('lyr').addEventListener('pointerdown', async () => {
   if (LY.k >= LY.lines.length){
     LY.timing = false; LY.shown = -2; $('lyr').classList.remove('timing'); await saveLyrics(); flash('歌詞のタイミングを保存しました'); return;
   }
+  LY.times = effTimes();
   LY.times[LY.k] = Math.max(0, round1(S.t - 0.15));
-  for (let j = LY.k + 1; j < LY.times.length; j++){ if (LY.times[j] != null && LY.times[j] <= LY.times[LY.k]) LY.times[j] = null; else break; }
   LY.k++;
   if (LY.k >= LY.lines.length){ LY.timing = false; LY.shown = -2; $('lyr').classList.remove('timing'); await saveLyrics(); flash('歌詞のタイミングを保存しました'); }
 });
